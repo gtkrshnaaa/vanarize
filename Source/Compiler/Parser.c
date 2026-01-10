@@ -22,12 +22,14 @@ static void advance() {
     currentToken = nextToken;
     scanNext();
 }
+
 static void consume(TokenType type, const char* message) {
     if (currentToken.type == type) {
         advance();
         return;
     }
     fprintf(stderr, "[Parser] Error at line %d: %s\n", currentToken.line, message);
+    fprintf(stderr, "Got token type %d\n", currentToken.type);
     exit(1);
 }
 
@@ -191,7 +193,7 @@ static AstNode* factor() {
     while (currentToken.type == TOKEN_SLASH || currentToken.type == TOKEN_STAR) {
         Token op = currentToken;
         advance();
-        AstNode* right = primary();
+        AstNode* right = call(); // Was incorrectly primary()!
         
         BinaryExpr* node = malloc(sizeof(BinaryExpr));
         node->main.type = NODE_BINARY_EXPR;
