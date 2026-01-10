@@ -6,6 +6,7 @@
 #include "Core/Memory.h"
 #include "Core/GarbageCollector.h"
 #include "Core/Native.h"
+#include "StdLib/StdTime.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -299,6 +300,36 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
 
         case NODE_GET_EXPR: {
             GetExpr* get = (GetExpr*)node;
+            
+            // Special case: StdTime namespace
+            if (get->object->type == NODE_LITERAL_EXPR) {
+                LiteralExpr* lit = (LiteralExpr*)get->object;
+                if (lit->token.type == TOKEN_IDENTIFIER &&
+                    lit->token.length == 7 && 
+                    memcmp(lit->token.start, "StdTime", 7) == 0) {
+                    
+                    // StdTime.Now() / Measure() / Sleep()
+                    if (get->name.length == 3 && memcmp(get->name.start, "Now", 3) == 0) {
+                        void* funcPtr = (void*)StdTime_Now;
+                        Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                        break; // RAX has function pointer, done
+                    }
+                    else if (get->name.length == 7 && memcmp(get->name.start, "Measure", 7) == 0) {
+                        void* funcPtr = (void*)StdTime_Measure;
+                        Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                        break;
+                    }
+                    else if (get->name.length == 5 && memcmp(get->name.start, "Sleep", 5) == 0) {
+                        void* funcPtr = (void*)StdTime_Sleep;
+                        Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                        break;
+                    }
+                    
+                    fprintf(stderr, "JIT Error: Unknown StdTime method '%.*s'\n", get->name.length, get->name.start);
+                    exit(1);
+                }
+            }
+            
             // 1. Compile Object -> RAX
             emitNode(as, get->object, ctx);
             

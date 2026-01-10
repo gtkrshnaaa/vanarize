@@ -1,0 +1,9 @@
+// Simple timing test
+function TestTiming() {
+    number x = StdTime.Now();
+    print(x);
+}
+
+function Main() {
+    TestTiming();
+}
