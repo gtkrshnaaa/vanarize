@@ -358,16 +358,48 @@ static AstNode* declaration() {
         
         consume(TOKEN_LEFT_PAREN, "Expect '(' after function name.");
         
-        Token* params = malloc(sizeof(Token) * 8); // Max 8 params
+        Token* params = malloc(sizeof(Token) * 8); 
+        Token* paramTypes = malloc(sizeof(Token) * 8);
         int paramCount = 0;
         
         if (currentToken.type != TOKEN_RIGHT_PAREN) {
             do {
+                // Check if typed: Type Name
+                Token typeToken = {0};
+                if (currentToken.type == TOKEN_TYPE_NUMBER || 
+                    currentToken.type == TOKEN_TYPE_TEXT || 
+                    currentToken.type == TOKEN_TYPE_BOOLEAN) {
+                    typeToken = currentToken;
+                    advance();
+                } else if (currentToken.type == TOKEN_IDENTIFIER && nextToken.type == TOKEN_IDENTIFIER) {
+                    // Struct Type
+                    typeToken = currentToken;
+                    advance();
+                }
+                
                 consume(TOKEN_IDENTIFIER, "Expect parameter name.");
-                params[paramCount++] = previousToken;
+                params[paramCount] = previousToken;
+                paramTypes[paramCount] = typeToken;
+                paramCount++;
             } while (currentToken.type == TOKEN_COMMA && (advance(), 1));
         }
         consume(TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");
+        
+        // Return Type :: Type
+        Token returnType = {0};
+        if (currentToken.type == TOKEN_DOUBLE_COLON) {
+            advance();
+            if (currentToken.type == TOKEN_TYPE_NUMBER || 
+                currentToken.type == TOKEN_TYPE_TEXT || 
+                currentToken.type == TOKEN_TYPE_BOOLEAN ||
+                currentToken.type == TOKEN_IDENTIFIER) {
+                returnType = currentToken;
+                advance();
+            } else {
+                 fprintf(stderr, "[Parser] Expect type after '::'\n");
+                 exit(1);
+            }
+        }
         
         consume(TOKEN_LEFT_BRACE, "Expect '{' before function body.");
         BlockStmt* body = malloc(sizeof(BlockStmt));
@@ -384,7 +416,9 @@ static AstNode* declaration() {
         node->main.type = NODE_FUNCTION_DECL;
         node->name = name;
         node->params = params;
+        node->paramTypes = paramTypes;
         node->paramCount = paramCount;
+        node->returnType = returnType;
         node->body = (AstNode*)body;
         return (AstNode*)node;
     }

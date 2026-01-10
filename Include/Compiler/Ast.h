@@ -95,7 +95,9 @@ typedef struct {
     AstNode main;
     Token name;
     Token* params;
+    Token* paramTypes; // Types for params
     int paramCount;
+    Token returnType; // :: Type
     AstNode* body;
 } FunctionDecl;
 

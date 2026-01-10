@@ -1,0 +1,23 @@
+struct Vector {
+    number x
+    number y
+    number z
+}
+
+function AddVectors(Vector v1, Vector v2) :: Vector {
+    Vector res = {
+        x: v1.x + v2.x,
+        y: v1.y + v2.y,
+        z: v1.z + v2.z
+    };
+    return res;
+}
+
+Vector a = { x: 1, y: 2, z: 3 };
+Vector b = { x: 4, y: 5, z: 6 };
+
+var c = AddVectors(a, b);
+
+print(c.x);
+print(c.y);
+print(c.z);
