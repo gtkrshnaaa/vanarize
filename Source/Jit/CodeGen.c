@@ -619,7 +619,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // Expression evaluation uses temp stack which is effectively "above" locals.
             // Since we push/pop relative to RSP, locals remain "below".
             // RBP is fixed anchor. Locals at [RBP-8].
-            if (bin->op.type == TOKEN_PLUS || bin->op.type == TOKEN_MINUS || bin->op.type == TOKEN_STAR) {
+            if (bin->op.type == TOKEN_PLUS || bin->op.type == TOKEN_MINUS || bin->op.type == TOKEN_STAR || bin->op.type == TOKEN_SLASH) {
                 // Arithmetic operators: Use XMM registers (floating point)
                 
                 // 1. Emit Left -> RAX
@@ -653,6 +653,10 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     // MULSD XMM0, XMM1: F2 0F 59 C1
                     Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
                     Asm_Emit8(as, 0x59); Asm_Emit8(as, 0xC1);
+                } else if (bin->op.type == TOKEN_SLASH) {
+                    // DIVSD XMM0, XMM1: F2 0F 5E C1
+                    Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
+                    Asm_Emit8(as, 0x5E); Asm_Emit8(as, 0xC1);
                 }
                 
                 // Move result XMM0 -> RAX
