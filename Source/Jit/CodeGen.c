@@ -540,17 +540,17 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 Asm_Emit8(as, 0x6E);
                 Asm_Emit8(as, 0xC0); // ModRM: XMM0, RAX
                 
+                // Zero RAX *before* comparison to avoid clobbering flags
+                Asm_Emit8(as, 0x48);
+                Asm_Emit8(as, 0x31);
+                Asm_Emit8(as, 0xC0);
+                
                 // UCOMISD XMM0, XMM1 (compare XMM0 to XMM1)
                 // Opcode: 66 0F 2E /r
                 Asm_Emit8(as, 0x66);
                 Asm_Emit8(as, 0x0F);
                 Asm_Emit8(as, 0x2E);
                 Asm_Emit8(as, 0xC1); // ModRM: XMM0, XMM1
-                
-                // Zero RAX
-                Asm_Emit8(as, 0x48);
-                Asm_Emit8(as, 0x31);
-                Asm_Emit8(as, 0xC0);
                 
                 // SETcc AL based on flags from UCOMISD
                 if (bin->op.type == TOKEN_LESS) {
