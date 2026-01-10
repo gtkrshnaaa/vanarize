@@ -2,6 +2,7 @@
 #include "Jit/AssemblerX64.h"
 #include "Jit/ExecutableMemory.h"
 #include "Core/VanarizeValue.h"
+#include "Core/Runtime.h"
 #include "Core/VanarizeObject.h"
 #include "Core/Memory.h"
 #include "Core/GarbageCollector.h"
@@ -614,53 +615,58 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 
                 // SETcc AL based on flags from UCOMISD
                 if (bin->op.type == TOKEN_LESS) {
-                    // SETB AL (set if below/less for unsigned)
-                    Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x92);
-                    Asm_Emit8(as, 0xC0);
+                    // SETB AL
+                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x92); Asm_Emit8(as, 0xC0);
                 } else if (bin->op.type == TOKEN_GREATER) {
-                    // SETA AL (set if above)
-                    Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x97);
-                    Asm_Emit8(as, 0xC0);
+                    // SETA AL
+                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x97); Asm_Emit8(as, 0xC0);
                 } else if (bin->op.type == TOKEN_LESS_EQUAL) {
                     // SETBE AL
-                    Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x96);
-                    Asm_Emit8(as, 0xC0);
+                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x96); Asm_Emit8(as, 0xC0);
                 } else if (bin->op.type == TOKEN_GREATER_EQUAL) {
                     // SETAE AL
-                    Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x93);
-                    Asm_Emit8(as, 0xC0);
+                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x93); Asm_Emit8(as, 0xC0);
                 } else if (bin->op.type == TOKEN_EQUAL_EQUAL) {
-                    // SETE AL (set if equal)
-                    Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x94);
-                    Asm_Emit8(as, 0xC0);
+                    // SETE AL
+                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x94); Asm_Emit8(as, 0xC0);
                 } else if (bin->op.type == TOKEN_BANG_EQUAL) {
                     // SETNE AL
-                    Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x95);
-                    Asm_Emit8(as, 0xC0);
+                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x95); Asm_Emit8(as, 0xC0);
                 }
                 
-                // Convert integer result in RAX to double
-                // CVTSI2SD XMM0, RAX: converts integer in RAX to double in XMM0
-                // Opcode: F2 48 0F 2A C0
-                Asm_Emit8(as, 0xF2); // REPNE prefix
-                Asm_Emit8(as, 0x48); // REX.W
-                Asm_Emit8(as, 0x0F);
-                Asm_Emit8(as, 0x2A);
-                Asm_Emit8(as, 0xC0); // ModRM: XMM0, RAX
+                // Now AL is 1 (True) or 0 (False).
+                // We need to return VAL_TRUE or VAL_FALSE in RAX.
+                // CMP AL, 0
+                // JE FalseLabel
+                // MOV RAX, VAL_TRUE
+                // JMP EndLabel
+                // FalseLabel:
+                // MOV RAX, VAL_FALSE
+                // EndLabel:
                 
-                // Move double from XMM0 back to RAX
-                // MOVQ RAX, XMM0: 66 48 0F 7E C0
-                Asm_Emit8(as, 0x66);
-                Asm_Emit8(as, 0x48);
-                Asm_Emit8(as, 0x0F);
-                Asm_Emit8(as, 0x7E);
-                Asm_Emit8(as, 0xC0); // ModRM: XMM0, RAX
+                // CMP AL, 0: 3C 00
+                Asm_Emit8(as, 0x3C); Asm_Emit8(as, 0x00);
+                
+                // JE + offset (short jump)
+                // We don't know exact size of MOV RAX, VAL_TRUE + JMP.
+                // MOV RAX, imm64 is 10 bytes (48 B8 ...).
+                // JMP rel8 is 2 bytes (EB ...).
+                // So FalseLabel is at Current + 2 + 10 + 2 = Current + 14.
+                // JE 0x0C (12 bytes jump over MOV and JMP? No, 12 bytes total)
+                
+                Asm_Emit8(as, 0x74); // JE
+                Asm_Emit8(as, 0x0C); // Jump 12 bytes (Move(10) + Jmp(2))
+                
+                // True path:
+                Asm_Mov_Imm64(as, RAX, VAL_TRUE);
+                
+                // JMP over False path
+                Asm_Emit8(as, 0xEB); // JMP rel8
+                Asm_Emit8(as, 0x0A); // Jump 10 bytes (Move(10))
+                
+                // False path:
+                // Move VAL_FALSE to RAX
+                Asm_Mov_Imm64(as, RAX, VAL_FALSE);
                 
                 break;
             }
@@ -675,7 +681,26 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // Expression evaluation uses temp stack which is effectively "above" locals.
             // Since we push/pop relative to RSP, locals remain "below".
             // RBP is fixed anchor. Locals at [RBP-8].
-            if (bin->op.type == TOKEN_PLUS || bin->op.type == TOKEN_MINUS || bin->op.type == TOKEN_STAR || bin->op.type == TOKEN_SLASH) {
+            if (bin->op.type == TOKEN_PLUS) {
+                // String concat OR Addition -> Runtime Call
+                 // 1. Emit Left -> RAX
+                emitNode(as, bin->left, ctx);
+                Asm_Push(as, RAX);
+                
+                // 2. Emit Right -> RAX
+                emitNode(as, bin->right, ctx);
+                
+                // RAX has Right. Move to RSI (Arg2).
+                Asm_Mov_Reg_Reg(as, RSI, RAX);
+                
+                // Pop Left to RDI (Arg1).
+                Asm_Pop(as, RDI);
+                
+                void* funcPtr = (void*)Runtime_Add;
+                Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                Asm_Call_Reg(as, RAX);
+                // Result in RAX.
+            } else if (bin->op.type == TOKEN_MINUS || bin->op.type == TOKEN_STAR || bin->op.type == TOKEN_SLASH) {
                 // Arithmetic operators: Use XMM registers (floating point)
                 
                 // 1. Emit Left -> RAX
@@ -697,11 +722,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
                 Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0);
                 
-                if (bin->op.type == TOKEN_PLUS) {
-                    // ADDSD XMM0, XMM1: F2 0F 58 C1
-                    Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x58); Asm_Emit8(as, 0xC1);
-                } else if (bin->op.type == TOKEN_MINUS) {
+                if (bin->op.type == TOKEN_MINUS) {
                     // SUBSD XMM0, XMM1: F2 0F 5C C1
                     Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
                     Asm_Emit8(as, 0x5C); Asm_Emit8(as, 0xC1);
@@ -980,6 +1001,12 @@ JitFunction Jit_Compile(AstNode* root) {
             Asm_Emit8(&as, 0x55);             // push rbp
             Asm_Mov_Reg_Reg(&as, RBP, RSP);   // mov rbp, rsp
             
+            // Reserve Stack Space (Patch later)
+            // SUB RSP, Imm32: 48 81 EC <4 bytes>
+            Asm_Emit8(&as, 0x48); Asm_Emit8(&as, 0x81); Asm_Emit8(&as, 0xEC);
+            size_t stackSizePatch = as.offset;
+            Asm_Emit8(&as, 0x00); Asm_Emit8(&as, 0x00); Asm_Emit8(&as, 0x00); Asm_Emit8(&as, 0x00);
+            
             CompilerContext ctx = {0};
             
             // Parameters
@@ -988,6 +1015,7 @@ JitFunction Jit_Compile(AstNode* root) {
             for(int p=0; p<func->paramCount; p++) {
                 if (p < 6) {
                     ctx.stackSize += 8;
+                    // ... existing logic ...
                     ctx.locals[ctx.localCount].name = func->params[p];
                     ctx.locals[ctx.localCount].typeName = func->paramTypes[p];
                     ctx.locals[ctx.localCount].offset = ctx.stackSize;
@@ -996,12 +1024,23 @@ JitFunction Jit_Compile(AstNode* root) {
                     Asm_Mov_Mem_Reg(&as, RBP, -ctx.stackSize, paramRegs[p]);
                 }
             }
+
             
             // Body
             emitNode(&as, func->body, &ctx);
             
             // Default return (if not present)
             // Epilogue
+            
+            // Patch Stack Size
+            // align stack to 16 bytes for ABI calls logic? 
+            // If we use Call, RSP must be 16-byte aligned. 
+            // ctx.stackSize might be 8. 8 + 8(RBP) = 16. Aligned.
+            // If stackSize 16. 16+8 = 24. Misaligned.
+            // We should align stackSize to 16 bytes.
+            int alignedStack = (ctx.stackSize + 15) & ~15;
+            Asm_Patch32(&as, stackSizePatch, alignedStack);
+            
             Asm_Mov_Reg_Reg(&as, RSP, RBP);   // mov rsp, rbp
             Asm_Pop(&as, RBP);                // pop rbp
             Asm_Ret(&as);                     // ret
