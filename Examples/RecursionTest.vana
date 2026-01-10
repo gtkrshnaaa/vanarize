@@ -1,0 +1,11 @@
+function Fact(n) { 
+    if (n < 2) { 
+        return 1; 
+    } 
+    return n * Fact(n - 1); 
+} 
+
+function Main() { 
+    var res = Fact(5);
+    print(res); 
+}
