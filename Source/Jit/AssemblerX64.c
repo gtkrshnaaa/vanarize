@@ -41,8 +41,15 @@ void Asm_Mov_Imm64(Assembler* as, Register dst, uint64_t val) {
 // MOV dst, src
 // Opcode: 48 89 /r (ModR/M)
 void Asm_Mov_Reg_Reg(Assembler* as, Register dst, Register src) {
-    (void)as; (void)dst; (void)src;
-    // Implementation placeholder if needed, focusing on Imm -> Reg -> Ret first
+    if (dst > RDI || src > RDI) {
+        fprintf(stderr, "Extended registers not yet supported in Mov_Reg_Reg\n");
+        exit(1);
+    }
+    Asm_Emit8(as, 0x48);
+    Asm_Emit8(as, 0x89);
+    // Mod = 11 (Register) | Src | Dst
+    uint8_t modrm = 0xC0 | (src << 3) | dst;
+    Asm_Emit8(as, modrm);
 }
 
 // ADD dst, src
@@ -97,6 +104,33 @@ void Asm_Call_Reg(Assembler* as, Register src) {
 
 void Asm_Mov_Reg_Ptr(Assembler* as, Register dst, void* ptr) {
     Asm_Mov_Imm64(as, dst, (uint64_t)(uintptr_t)ptr);
+}
+
+// Helper for ModR/M Disp32
+static void emitModRM_Disp32(Assembler* as, Register reg, Register base, int32_t offset) {
+    // Mod = 10 (Disp32) | Reg | R/M
+    Asm_Emit8(as, 0x80 | (reg << 3) | base);
+    // Emit 32-bit offset (little endian)
+    for (int i=0; i<4; i++) {
+        Asm_Emit8(as, (uint8_t)(offset & 0xFF));
+        offset >>= 8;
+    }
+}
+
+// MOV dst, [base + offset]
+// Opcode: 48 8B /r
+void Asm_Mov_Reg_Mem(Assembler* as, Register dst, Register base, int32_t offset) {
+    Asm_Emit8(as, 0x48);
+    Asm_Emit8(as, 0x8B);
+    emitModRM_Disp32(as, dst, base, offset);
+}
+
+// MOV [base + offset], src
+// Opcode: 48 89 /r
+void Asm_Mov_Mem_Reg(Assembler* as, Register base, int32_t offset, Register src) {
+    Asm_Emit8(as, 0x48);
+    Asm_Emit8(as, 0x89);
+    emitModRM_Disp32(as, src, base, offset);
 }
 
 // RET

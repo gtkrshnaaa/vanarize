@@ -171,6 +171,46 @@ static AstNode* primary() {
     return NULL;
 }
 
+static AstNode* declaration() {
+    if (currentToken.type == TOKEN_VAR) {
+        advance();
+        consume(TOKEN_IDENTIFIER, "Expect variable name.");
+        Token name = previousToken;
+        
+        AstNode* initializer = NULL;
+        if (currentToken.type == TOKEN_EQUAL) {
+            advance();
+            initializer = expression();
+        }
+        
+        consume(TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
+        
+        VarDecl* node = malloc(sizeof(VarDecl));
+        node->main.type = NODE_VAR_DECL;
+        node->name = name;
+        node->initializer = initializer;
+        return (AstNode*)node;
+    }
+    
+    // Fallback to statement -> expression statement
+    AstNode* expr = expression();
+    consume(TOKEN_SEMICOLON, "Expect ';' after expression.");
+    return expr;
+}
+
 AstNode* Parser_ParseExpression(void) {
-    return expression();
+    // HACK: For now, we return a Block containing declarations
+    // We need to parse multiple statements.
+    
+    // We'll create a BlockStmt node to hold everything
+    BlockStmt* block = malloc(sizeof(BlockStmt));
+    block->main.type = NODE_BLOCK;
+    block->statements = malloc(sizeof(AstNode*) * 64); // Max 64 stmts
+    block->count = 0;
+    
+    while (currentToken.type != TOKEN_EOF) {
+        block->statements[block->count++] = declaration();
+    }
+    
+    return (AstNode*)block;
 }

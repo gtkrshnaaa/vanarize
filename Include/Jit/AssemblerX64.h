@@ -44,6 +44,18 @@ void Asm_Push(Assembler* as, Register src);
 // POP r64
 void Asm_Pop(Assembler* as, Register dst);
 
+// CALL r64 (Absolute call)
+void Asm_Call_Reg(Assembler* as, Register src);
+
+// MOV dst, imm64 (Pointer version)
+void Asm_Mov_Reg_Ptr(Assembler* as, Register dst, void* ptr);
+
+// MOV dst, [base + offset]
+void Asm_Mov_Reg_Mem(Assembler* as, Register dst, Register base, int32_t offset);
+
+// MOV [base + offset], src
+void Asm_Mov_Mem_Reg(Assembler* as, Register base, int32_t offset, Register src);
+
 // RET
 void Asm_Ret(Assembler* as);
 

@@ -44,6 +44,12 @@ typedef struct {
 
 typedef struct {
     AstNode main;
+    Token name;
+    AstNode* initializer;
+} VarDecl;
+
+typedef struct {
+    AstNode main;
     Token callee; // Identifier
     AstNode** args;
     int argCount;
@@ -56,12 +62,7 @@ typedef struct {
     int count;
 } BlockStmt;
 
-typedef struct {
-    AstNode main;
-    Token name;
-    Token typeName; // e.g. "number"
-    AstNode* initializer;
-} VarDecl;
+
 
 typedef struct {
     AstNode main;
