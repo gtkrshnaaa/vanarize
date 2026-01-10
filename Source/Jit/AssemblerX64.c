@@ -107,9 +107,18 @@ void Asm_Mov_Reg_Ptr(Assembler* as, Register dst, void* ptr) {
 }
 
 // Helper for ModR/M Disp32
+// Helper for ModR/M Disp32
 static void emitModRM_Disp32(Assembler* as, Register reg, Register base, int32_t offset) {
     // Mod = 10 (Disp32) | Reg | R/M
-    Asm_Emit8(as, 0x80 | (reg << 3) | base);
+    Asm_Emit8(as, 0x80 | (reg << 3) | (base & 7));
+    
+    // Check for SIB requirement (RSP=4 or R12=12)
+    if ((base & 7) == 4) {
+        // SIB: Scale=0 (00), Index=None (100/4), Base=RSP (100/4)
+        // 0x24
+        Asm_Emit8(as, 0x24);
+    }
+    
     // Emit 32-bit offset (little endian)
     for (int i=0; i<4; i++) {
         Asm_Emit8(as, (uint8_t)(offset & 0xFF));
