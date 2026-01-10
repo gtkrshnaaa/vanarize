@@ -585,6 +585,23 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     Asm_Emit8(as, 0xC0);
                 }
                 
+                // Convert integer result in RAX to double
+                // CVTSI2SD XMM0, RAX: converts integer in RAX to double in XMM0
+                // Opcode: F2 48 0F 2A C0
+                Asm_Emit8(as, 0xF2); // REPNE prefix
+                Asm_Emit8(as, 0x48); // REX.W
+                Asm_Emit8(as, 0x0F);
+                Asm_Emit8(as, 0x2A);
+                Asm_Emit8(as, 0xC0); // ModRM: XMM0, RAX
+                
+                // Move double from XMM0 back to RAX
+                // MOVQ RAX, XMM0: 66 48 0F 7E C0
+                Asm_Emit8(as, 0x66);
+                Asm_Emit8(as, 0x48);
+                Asm_Emit8(as, 0x0F);
+                Asm_Emit8(as, 0x7E);
+                Asm_Emit8(as, 0xC0); // ModRM: XMM0, RAX
+                
                 break;
             }
             
