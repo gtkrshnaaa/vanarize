@@ -12,11 +12,12 @@ function Main() {
     }
     
     number elapsed = StdTime.Measure();
-print(elapsed);
-if (elapsed == 0) {
-    print("Elapsed is zero!");
-    elapsed = 1; // Prevent division by zero
-}
-number ops = 10000000 * 1000000000 / elapsed;
-print(ops);
+    number elapsed = StdTime.Measure();
+    print(elapsed);
+    if (elapsed == 0) {
+        print("Elapsed is zero!");
+        elapsed = 1; // Prevent division by zero
+    }
+    number ops = 10000000 * 1000000000 / elapsed;
+    print(ops);
 }
