@@ -1,0 +1,31 @@
+// VANARIZE INLINE BENCHMARK
+// Direct measurement without function calls
+
+function Main() {
+    number iterations = 1000000;
+    number i = 0;
+    number sum = 0;
+    
+    // Start measurement
+    StdTimeMeasure();
+    
+    // Arithmetic loop
+    i = 0;
+    sum = 0;
+    while (i < iterations) {
+        sum = sum + i;
+        i = i + 1;
+    }
+    
+    // Stop and get elapsed time (nanoseconds)
+    number elapsed = StdTimeMeasure();
+    
+    // Calculate operations per second
+    // ops/sec = iterations / (elapsed_seconds)
+    // ops/sec = iterations / (elapsed / 1e9)
+    // ops/sec = iterations * 1e9 / elapsed
+    number billion = 1000000000;
+    number opsPerSec = iterations * billion / elapsed;
+    
+    print(opsPerSec);
+}
