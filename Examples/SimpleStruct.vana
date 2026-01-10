@@ -1,5 +1,5 @@
 // VANARIZE TEST: Basic Struct Operations
-// Minimal test for struct definition, instantiation, and field access
+// Master Plan Compliance: PascalCase Structs, Typed Fields
 
 struct Point {
     number x
