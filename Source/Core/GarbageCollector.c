@@ -13,7 +13,11 @@ static Obj* objectList = NULL;
 static Value* roots[MAX_ROOTS];
 static int rootCount = 0;
 
-void GC_Init(void) {
+// Stack scanning
+static void* stackBottom = NULL;
+
+void GC_Init(void* stackBase) {
+    stackBottom = stackBase;
     objectList = NULL;
     rootCount = 0;
 }
@@ -35,7 +39,14 @@ void GC_UnregisterRoot(Value* root) {
     }
 }
 
+static uintptr_t minAddr = UINTPTR_MAX;
+static uintptr_t maxAddr = 0;
+
 void GC_RegisterObject(Obj* obj) {
+    uintptr_t addr = (uintptr_t)obj;
+    if (addr < minAddr) minAddr = addr;
+    if (addr > maxAddr) maxAddr = addr;
+    
     obj->next = objectList;
     obj->isMarked = false;
     objectList = obj;
@@ -44,6 +55,17 @@ void GC_RegisterObject(Obj* obj) {
 static void markValue(Value value) {
     if (!IsObj(value)) return;
     Obj* obj = ValueToObj(value);
+    
+    // Conservative GC Check
+    uintptr_t addr = (uintptr_t)obj;
+    if (addr < minAddr || addr > maxAddr) return;
+    
+    // Alignment check (malloc usually 8-byte aligned)
+    if (addr % 8 != 0) return;
+    
+    // printf("GC: Marking %p. Range: %lx-%lx\n", obj, minAddr, maxAddr);
+    // fflush(stdout);
+    
     if (obj == NULL || obj->isMarked) return;
     
     obj->isMarked = true;
@@ -61,7 +83,33 @@ static void markValue(Value value) {
     }
 }
 
+static void markStack(void) {
+    void* stackTop = &stackTop; // Address of local variable is current stack top
+    
+    // Iterate from top (low address) to bottom (high address)
+    // Assume 64-bit alignment
+    uint64_t* start = (uint64_t*)stackTop;
+    uint64_t* end = (uint64_t*)stackBottom;
+    
+    // printf("GC: Scanning Stack %p to %p\n", start, end);
+    // fflush(stdout);
+    
+    // Sanity check order
+    if (start > end) {
+        // Stack grows up?? (Unlikely on x64 Linux) or we are in a weird context
+        uint64_t* temp = start;
+        start = end;
+        end = temp;
+    }
+    
+    for (uint64_t* slot = start; slot < end; slot++) {
+        Value val = (Value)*slot;
+        markValue(val);
+    }
+}
+
 static void markRoots(void) {
+    markStack();
     for (int i = 0; i < rootCount; i++) {
         markValue(*roots[i]);
     }
@@ -98,10 +146,18 @@ static void sweep(void) {
             obj = &(*obj)->next;
         }
     }
+    // No need for GC_ResetHeap with free-list
 }
 
 void GC_Collect(void) {
+    if (rootCount == 0 && stackBottom == NULL) return; // Optimization/Safety
+    
+    // printf("GC: Starting Collection. Roots: %d\n", rootCount);
+    // fflush(stdout);
+    
     markRoots();
     sweep();
-    // No need for GC_ResetHeap with free-list
+    
+    // printf("GC: Finished Collection.\n");
+    // fflush(stdout);
 }
