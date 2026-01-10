@@ -453,6 +453,31 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     Asm_Call_Reg(as, RAX);
                     break;
                  }
+                 // Check StdTime functions
+                 if (call->callee.length == 10 && memcmp(call->callee.start, "StdTimeNow", 10) == 0) {
+                     void* funcPtr = (void*)StdTime_Now;
+                     Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                     Asm_Call_Reg(as, RAX);
+                     break;
+                 }
+                 if (call->callee.length == 14 && memcmp(call->callee.start, "StdTimeMeasure", 14) == 0) {
+                     void* funcPtr = (void*)StdTime_Measure;
+                     Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                     Asm_Call_Reg(as, RAX);
+                     break;
+                 }
+                 if (call->callee.length == 12 && memcmp(call->callee.start, "StdTimeSleep", 12) == 0) {
+                     // StdTimeSleep(ms) - takes 1 arg
+                     if (call->argCount > 0) {
+                         emitNode(as, call->args[0], ctx);
+                         // Convert double to uint64_t in RDI
+                         Asm_Mov_Reg_Reg(as, RDI, RAX);
+                     }
+                     void* funcPtr = (void*)StdTime_Sleep;
+                     Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                     Asm_Call_Reg(as, RAX);
+                     break;
+                 }
                  
                  fprintf(stderr, "JIT Error: Undefined function/variable '%.*s'\n", call->callee.length, call->callee.start);
                  exit(1);
