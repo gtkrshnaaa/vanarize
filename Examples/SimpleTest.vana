@@ -1,0 +1,5 @@
+// Simple number test
+function Main() {
+    number x = 42;
+    print(x);
+}
