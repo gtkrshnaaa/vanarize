@@ -5,21 +5,27 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#define HEAP_SIZE (1024 * 1024 * 256) // 256 MB for the Nursery (Initial Proof of Concept)
+#define HEAP_SIZE (1024 * 1024 * 256) // 256 MB
 
-// Export for GC
-char* heapStart = NULL;
-char* heapPtr = NULL;
+// Free-List Node
+typedef struct FreeBlock {
+    size_t size;
+    struct FreeBlock* next;
+} FreeBlock;
+
+static char* heapStart = NULL;
 static char* heapEnd = NULL;
+FreeBlock* freeList = NULL; // Export for GC
 
 void GC_ResetHeap(void) {
-    // Reset bump pointer (WARNING: This invalidates all pointers!)
-    // A proper GC would copy live objects
-    heapPtr = heapStart;
+    // After sweep, rebuild free list
+    // For now, simple approach: reset to single large block
+    freeList = (FreeBlock*)heapStart;
+    freeList->size = HEAP_SIZE - sizeof(FreeBlock);
+    freeList->next = NULL;
 }
 
 void VM_InitMemory(void) {
-    // Allocate a large contiguous block using mmap
     heapStart = mmap(NULL, HEAP_SIZE, 
                      PROT_READ | PROT_WRITE, 
                      MAP_PRIVATE | MAP_ANONYMOUS, 
@@ -30,41 +36,67 @@ void VM_InitMemory(void) {
         exit(1);
     }
     
-    heapPtr = heapStart;
     heapEnd = heapStart + HEAP_SIZE;
     
-    // printf("[Vanarize Core] Memory Initialized: %p - %p (%d MB)\n", heapStart, heapEnd, HEAP_SIZE / (1024*1024));
+    // Initialize free list with one big block
+    freeList = (FreeBlock*)heapStart;
+    freeList->size = HEAP_SIZE - sizeof(FreeBlock);
+    freeList->next = NULL;
 }
 
 void* MemAlloc(size_t size) {
     // Align to 8 bytes
     size = (size + 7) & ~7;
+    // Add space for size header
+    size_t totalSize = size + sizeof(size_t);
     
-    if (heapPtr + size > heapEnd) {
-        // Trigger GC
-        fprintf(stderr, "[Vanarize Core] Nursery full, triggering GC...\n");
-        GC_Collect();
-        
-        // Check again after GC
-        if (heapPtr + size > heapEnd) {
-            fprintf(stderr, "[Vanarize Core] OOM: Nursery Exhausted after GC.\n");
-            exit(1);
+    // Find first fit
+    FreeBlock** block = &freeList;
+    while (*block) {
+        if ((*block)->size >= totalSize) {
+            FreeBlock* found = *block;
+            
+            // Split block if remainder is large enough
+            if (found->size > totalSize + sizeof(FreeBlock) + 16) {
+                FreeBlock* remainder = (FreeBlock*)((char*)found + totalSize);
+                remainder->size = found->size - totalSize;
+                remainder->next = found->next;
+                *block = remainder;
+            } else {
+                // Use entire block
+                *block = found->next;
+            }
+            
+            // Store size and return pointer after header
+            *(size_t*)found = totalSize;
+            return (char*)found + sizeof(size_t);
         }
+        block = &(*block)->next;
     }
     
-    void* result = heapPtr;
-    heapPtr += size;
+    // No free block found, trigger GC
+    fprintf(stderr, "[Vanarize Core] Heap full, triggering GC...\n");
+    GC_Collect();
     
-    // Register with GC if it's an object
-    // Caller must cast to Obj* and initialize type/next
+    // Try again after GC
+    block = &freeList;
+    while (*block) {
+        if ((*block)->size >= totalSize) {
+            FreeBlock* found = *block;
+            *block = found->next;
+            *(size_t*)found = totalSize;
+            return (char*)found + sizeof(size_t);
+        }
+        block = &(*block)->next;
+    }
     
-    return result;
+    fprintf(stderr, "[Vanarize Core] OOM: No free blocks after GC.\n");
+    exit(1);
 }
 
 void VM_FreeMemory(void) {
     if (heapStart != NULL) {
         munmap(heapStart, HEAP_SIZE);
         heapStart = NULL;
-        heapPtr = NULL;
     }
 }

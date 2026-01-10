@@ -67,13 +67,31 @@ static void markRoots(void) {
     }
 }
 
+// Free-list support
+typedef struct FreeBlock {
+    size_t size;
+    struct FreeBlock* next;
+} FreeBlock;
+
+extern FreeBlock* freeList;
+
 static void sweep(void) {
     Obj** obj = &objectList;
     while (*obj) {
         if (!(*obj)->isMarked) {
-            // Unreachable object, remove from list (don't free yet)
+            // Unreachable object, free it
             Obj* unreached = *obj;
             *obj = unreached->next;
+            
+            // Return to free list
+            // Get block start (before size header)
+            char* blockStart = (char*)unreached - sizeof(size_t);
+            size_t blockSize = *(size_t*)blockStart;
+            
+            FreeBlock* freed = (FreeBlock*)blockStart;
+            freed->size = blockSize;
+            freed->next = freeList;
+            freeList = freed;
         } else {
             // Reachable, unmark for next cycle
             (*obj)->isMarked = false;
@@ -82,18 +100,8 @@ static void sweep(void) {
     }
 }
 
-// Compact live objects (simplified: just reset heap pointer)
-// In a real GC, we would copy live objects to beginning of nursery
-extern char* heapStart;
-extern char* heapPtr;
-void GC_ResetHeap(void);
-
 void GC_Collect(void) {
     markRoots();
     sweep();
-    
-    // For now, reset heap (simple copying collector would be better)
-    // This works because we're using a bump-pointer allocator
-    // and objects are never moved after allocation
-    GC_ResetHeap();
+    // No need for GC_ResetHeap with free-list
 }
