@@ -620,7 +620,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 funcCtx.stackSize += 8;
                 Local* local = &funcCtx.locals[funcCtx.localCount++];
                 local->name = func->params[i];
-                local->typeName = (Token){0}; // Unknown type for params currently
+                local->typeName = func->paramTypes[i]; // Use parsed type
                 local->offset = funcCtx.stackSize;
             }
             
