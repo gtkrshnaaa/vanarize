@@ -744,29 +744,74 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
     }
 }
 
-JitFunction Jit_Compile(AstNode* node) {
-    void* mem = Jit_AllocExec(MAX_JIT_SIZE);
-    
+JitFunction Jit_Compile(AstNode* root) {
     Assembler as;
-    Asm_Init(&as, (uint8_t*)mem, MAX_JIT_SIZE);
+    Asm_Init(&as);
     
-    // Prologue: PUSH RBP; MOV RBP, RSP
-    Asm_Push(&as, RBP);
-    Asm_Mov_Reg_Reg(&as, RBP, RSP);
-    // Note: Asm_Mov_Reg_Reg is implemented properly?
-    // Wait, check implementation.
-    // Yes: 48 89 /r -> ModRM(Direct).
+    CompilerContext ctx = {0};
     
-    CompilerContext ctx;
-    ctx.localCount = 0;
-    ctx.stackSize = 0;
-
-    emitNode(&as, node, &ctx);
+    // Compile all top-level declarations (functions, structs, etc)
+    emitNode(&as, root, &ctx);
     
-    // Epilogue: MOV RSP, RBP; POP RBP; RET
-    Asm_Mov_Reg_Reg(&as, RSP, RBP);
-    Asm_Pop(&as, RBP);
-    Asm_Ret(&as);
+    // Now find Main() function and create entry point
+    // Main should be in global function registry
+    Token mainToken;
+    mainToken.start = "Main";
+    mainToken.length = 4;
+    mainToken.type = TOKEN_IDENTIFIER;
     
-    return (JitFunction)mem;
+    // Try to find Main in global functions (if we have a registry)
+    // For now, we need to search the AST for Main function
+    
+    // Create entry point that calls Main()
+    void* code = Jit_AllocExec(as.size);
+    memcpy(code, as.code, as.size);
+    
+    // Find Main function in the compiled code
+    // For simple case: root is BlockStmt with function declarations
+    if (root->type == NODE_BLOCK) {
+        BlockStmt* block = (BlockStmt*)root;
+        
+        // Search for Main function
+        for (int i = 0; i < block->count; i++) {
+            if (block->statements[i]->type == NODE_FUNCTION_DECL) {
+                FunctionDecl* func = (FunctionDecl*)block->statements[i];
+                if (func->name.length == 4 && 
+                    memcmp(func->name.start, "Main", 4) == 0) {
+                    
+                    // Found Main! Now we need its compiled address
+                    // Problem: we don't track function addresses during compilation
+                    // Solution: compile Main() body directly as entry point
+                    
+                    // Re-compile just Main's body as the entry point
+                    Assembler mainAs;
+                    Asm_Init(&mainAs);
+                    CompilerContext mainCtx = {0};
+                    
+                    // Function prologue
+                    Asm_Push(&mainAs, RBP);
+                    Asm_Mov_Reg_Reg(&mainAs, RBP, RSP);
+                    Asm_Emit8(&mainAs, 0x48); Asm_Emit8(&mainAs, 0x83);
+                    Asm_Emit8(&mainAs, 0xEC); Asm_Emit8(&mainAs, 0x40); // sub rsp, 64
+                    
+                    // Compile Main body
+                    emitNode(&mainAs, func->body, &mainCtx);
+                    
+                    // Function epilogue
+                    Asm_Emit8(&mainAs, 0x48); Asm_Emit8(&mainAs, 0x83);
+                    Asm_Emit8(&mainAs, 0xC4); Asm_Emit8(&mainAs, 0x40); // add rsp, 64
+                    Asm_Pop(&mainAs, RBP);
+                    Asm_Ret(&mainAs);
+                    
+                    void* mainCode = Jit_AllocExec(mainAs.size);
+                    memcpy(mainCode, mainAs.code, mainAs.size);
+                    
+                    return (JitFunction)mainCode;
+                }
+            }
+        }
+    }
+    
+    fprintf(stderr, "Error: Main() function not found\n");
+    exit(1);
 }
