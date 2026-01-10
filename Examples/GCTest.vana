@@ -1,13 +1,13 @@
-function CreateString() {
+function CreateString() :: text {
     return "This is a string that should survive GC " + "concatenation";
 }
 
-function Recursive(n, keepAlive) {
+function Recursive(number n, text keepAlive) {
     if (n == 0) {
         // Trigger lots of allocations to force GC
-        var i = 0;
+        number i = 0;
         while (i < 1000) {
-            var junk = "Allocating junk " + " to trigger GC " + i;
+            text junk = "Allocating junk " + " to trigger GC " + i;
             i = i + 1;
         }
         print("GC Triggered (hopefully)");
@@ -22,6 +22,6 @@ function Recursive(n, keepAlive) {
 }
 
 function Main() {
-    var keepAlive = CreateString();
+    text keepAlive = CreateString();
     Recursive(10, keepAlive);
 }
