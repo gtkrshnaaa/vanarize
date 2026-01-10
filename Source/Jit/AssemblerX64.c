@@ -63,6 +63,26 @@ void Asm_Add_Reg_Reg(Assembler* as, Register dst, Register src) {
     Asm_Emit8(as, modrm);
 }
 
+// PUSH r64
+// Opcode: 50 + rd
+void Asm_Push(Assembler* as, Register src) {
+    if (src > RDI) {
+        fprintf(stderr, "Extended registers not yet supported in Push\n");
+        exit(1);
+    }
+    Asm_Emit8(as, 0x50 + src);
+}
+
+// POP r64
+// Opcode: 58 + rd
+void Asm_Pop(Assembler* as, Register dst) {
+    if (dst > RDI) {
+        fprintf(stderr, "Extended registers not yet supported in Pop\n");
+        exit(1);
+    }
+    Asm_Emit8(as, 0x58 + dst);
+}
+
 // RET
 // Opcode: C3
 void Asm_Ret(Assembler* as) {
