@@ -622,8 +622,13 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             if (bin->op.type == TOKEN_PLUS || bin->op.type == TOKEN_MINUS || bin->op.type == TOKEN_STAR) {
                 // Arithmetic operators: Use XMM registers (floating point)
                 
-                // 1. Emit Right -> RAX
+                // 1. Emit Left -> RAX
+                emitNode(as, bin->left, ctx);
+                Asm_Push(as, RAX);
+                
+                // 2. Emit Right -> RAX
                 emitNode(as, bin->right, ctx);
+                
                 // Move Right to XMM1
                 // MOVQ XMM1, RAX: 66 48 0F 6E C8
                 Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
