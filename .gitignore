@@ -1,0 +1,17 @@
+# Build Artifacts
+Build/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# Executables
+vanarize
+bin/
+
+# OS Specific
+.DS_Store
+.vscode/
+.idea/
+*.swp
