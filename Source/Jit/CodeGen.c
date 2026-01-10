@@ -374,32 +374,36 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
 
         case NODE_ASSIGNMENT_EXPR: {
             AssignmentExpr* assign = (AssignmentExpr*)node;
-            // 1. Compile Value -> RAX
+            
+            // 1. Compile value to be assigned -> RAX
             emitNode(as, assign->value, ctx);
             
-            // 2. Resolve Variable
-            Token type; // dummy
+            // 2. Resolve variable location
+            Token type;
             int offset = resolveLocal(ctx, &assign->name, &type);
-            if (offset == 0) {
-                 fprintf(stderr, "JIT Error: Undefined variable '%.*s' in assignment\n", assign->name.length, assign->name.start);
-                 exit(1);
-            }
             
-            // 3. Store RAX -> [RBP - offset]
-            Asm_Mov_Mem_Reg(as, RBP, -offset, RAX);
-            // Result of assignment is the value (RAX preserved)
+            if (offset != 0) {
+                // Local variable found - store RAX to [RBP-offset]
+                Asm_Mov_Mem_Reg(as, RBP, -offset, RAX);
+            } else {
+                // Global? Struct field?
+                fprintf(stderr, "Error: Unknown variable '%.*s'\n", assign->name.length, assign->name.start);
+                exit(1);
+            }
             break;
         }
 
         case NODE_LITERAL_EXPR: {
             LiteralExpr* lit = (LiteralExpr*)node;
             if (lit->token.type == TOKEN_NUMBER) {
-                // ... (Number parsing same as before)
+                // Parse number as double
                 char buffer[64];
                 int len = lit->token.length < 63 ? lit->token.length : 63;
                 for(int i=0; i<len; i++) buffer[i] = lit->token.start[i];
                 buffer[len] = '\0';
-                uint64_t val = strtoull(buffer, NULL, 10);
+                
+                double num = strtod(buffer, NULL);
+                Value val = NumberToValue(num);
                 Asm_Mov_Imm64(as, RAX, val);
             } else if (lit->token.type == TOKEN_IDENTIFIER) {
                 // Resolve Variable
@@ -615,24 +619,41 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // Expression evaluation uses temp stack which is effectively "above" locals.
             // Since we push/pop relative to RSP, locals remain "below".
             // RBP is fixed anchor. Locals at [RBP-8].
-            // RSP moves.
-            // So Push/Pop for expression evaluation works fine ON TOP of locals.
-            
-            if (bin->op.type == TOKEN_PLUS) {
-                Asm_Add_Reg_Reg(as, RAX, RCX);
-            } else if (bin->op.type == TOKEN_MINUS) {
-                // SUB: RCX - RAX -> result
-                // We want: left(RCX) - right(RAX)
-                // SUB dst, src means dst = dst - src
-                // So: SUB RCX, RAX then MOV RAX, RCX
-                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x29);
-                Asm_Emit8(as, 0xC1); // SUB RCX, RAX
-                Asm_Mov_Reg_Reg(as, RAX, RCX);
-            } else if (bin->op.type == TOKEN_STAR) {
-                // IMUL RCX, RAX
-                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
-                Asm_Emit8(as, 0xAF); Asm_Emit8(as, 0xC8); // IMUL RCX, RAX
-                Asm_Mov_Reg_Reg(as, RAX, RCX);
+            if (bin->op.type == TOKEN_PLUS || bin->op.type == TOKEN_MINUS || bin->op.type == TOKEN_STAR) {
+                // Arithmetic operators: Use XMM registers (floating point)
+                
+                // 1. Emit Right -> RAX
+                emitNode(as, bin->right, ctx);
+                // Move Right to XMM1
+                // MOVQ XMM1, RAX: 66 48 0F 6E C8
+                Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
+                Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8);
+                
+                // 2. Get Left (popped) -> RAX
+                Asm_Pop(as, RAX);
+                // Move Left to XMM0
+                // MOVQ XMM0, RAX: 66 48 0F 6E C0
+                Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
+                Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0);
+                
+                if (bin->op.type == TOKEN_PLUS) {
+                    // ADDSD XMM0, XMM1: F2 0F 58 C1
+                    Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
+                    Asm_Emit8(as, 0x58); Asm_Emit8(as, 0xC1);
+                } else if (bin->op.type == TOKEN_MINUS) {
+                    // SUBSD XMM0, XMM1: F2 0F 5C C1
+                    Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
+                    Asm_Emit8(as, 0x5C); Asm_Emit8(as, 0xC1);
+                } else if (bin->op.type == TOKEN_STAR) {
+                    // MULSD XMM0, XMM1: F2 0F 59 C1
+                    Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
+                    Asm_Emit8(as, 0x59); Asm_Emit8(as, 0xC1);
+                }
+                
+                // Move result XMM0 -> RAX
+                // MOVQ RAX, XMM0: 66 48 0F 7E C0
+                Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
+                Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0);
             }
             break;
         }
