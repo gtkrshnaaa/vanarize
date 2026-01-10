@@ -1,10 +1,12 @@
 function Measure() {
-    var start = clock();
-    var i = 0;
+    // Native time usage per Master Plan (StdTime.Now)
+    // Note: Compiler requires semicolons currently.
+    var start = StdTime.Now(); 
+    number i = 0;
     while (i < 10000000) {
         i = i + 1;
     }
-    var end = clock();
+    var end = StdTime.Now();
     print("Time: " + (end - start));
     print("Ops: " + 10000000);
 }
