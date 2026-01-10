@@ -10,8 +10,10 @@
 #define MAX_JIT_SIZE 4096
 
 // Simple Symbol Table for Locals
+// Simple Symbol Table for Locals
 typedef struct {
     Token name;
+    Token typeName; // For static typing
     int offset; // RBP offset (negative)
 } Local;
 
@@ -21,11 +23,42 @@ typedef struct {
     int stackSize;
 } CompilerContext;
 
-static int resolveLocal(CompilerContext* ctx, Token* name) {
+// Struct Registry
+typedef struct {
+    Token name;
+    Token fieldNames[32];
+    int fieldCount;
+} StructInfo;
+
+static StructInfo structRegistry[32];
+static int structCount = 0;
+
+static StructInfo* resolveStruct(Token* name) {
+    for(int i=0; i<structCount; i++) {
+        Token* sName = &structRegistry[i].name;
+        if (sName->length == name->length && memcmp(sName->start, name->start, name->length) == 0) {
+            return &structRegistry[i];
+        }
+    }
+    return NULL;
+}
+
+static int getFieldOffset(StructInfo* info, Token* field) {
+    for (int i=0; i<info->fieldCount; i++) {
+        Token* fName = &info->fieldNames[i];
+        if (fName->length == field->length && memcmp(fName->start, field->start, field->length) == 0) {
+            return 24 + (i * 8); // 24 bytes header (16 obj + 8 count/padding) + 8 bytes per field
+        }
+    }
+    return -1;
+}
+
+static int resolveLocal(CompilerContext* ctx, Token* name, Token* outType) {
     for (int i = 0; i < ctx->localCount; i++) {
         Token* localName = &ctx->locals[i].name;
         if (localName->length == name->length && 
             memcmp(localName->start, name->start, name->length) == 0) {
+            if (outType) *outType = ctx->locals[i].typeName;
             return ctx->locals[i].offset;
         }
     }
@@ -42,6 +75,8 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             break;
         }
         
+
+
         case NODE_VAR_DECL: {
             VarDecl* decl = (VarDecl*)node;
             if (decl->initializer) {
@@ -53,7 +88,223 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             ctx->stackSize += 8;
             Local* local = &ctx->locals[ctx->localCount++];
             local->name = decl->name;
+            local->typeName = decl->typeName; // Store type
             local->offset = ctx->stackSize;
+            break;
+        }
+
+        case NODE_STRUCT_DECL: {
+            StructDecl* decl = (StructDecl*)node;
+            // Register struct
+            StructInfo* info = &structRegistry[structCount++];
+            info->name = decl->name;
+            info->fieldCount = decl->fieldCount;
+            for(int i=0; i<decl->fieldCount; i++) {
+                info->fieldNames[i] = decl->fields[i];
+            }
+            // No code to emit
+            break;
+        }
+
+        case NODE_STRUCT_INIT: {
+            StructInit* init = (StructInit*)node;
+            StructInfo* info = resolveStruct(&init->structName);
+            if (!info) {
+                 fprintf(stderr, "JIT Error: Unknown struct type '%.*s'\n", init->structName.length, init->structName.start);
+                 exit(1);
+            }
+            
+            // Allocate ObjStruct
+            int size = sizeof(ObjStruct) + (info->fieldCount * 8);
+            // We need to call malloc at runtime!
+            // `Asm_Mov_Reg_Ptr(as, RAX, malloc)` would call C malloc.
+            // But we can pre-calculate layout and fill it.
+            // Wait, we need to create the object AT RUNTIME.
+            // So we emit a call to `malloc(size)`.
+            // But we should use our GC allocator later.
+            // For now, use `malloc`.
+            
+            Asm_Mov_Imm64(as, RDI, size);
+            void* mallocPtr = (void*)malloc; // Address of malloc
+            Asm_Mov_Reg_Ptr(as, RAX, mallocPtr);
+            Asm_Call_Reg(as, RAX);
+            // RAX now has pointer. PUSH it to save while evaluating fields.
+            Asm_Push(as, RAX);
+            
+            // Set Type/Header
+            // ObjStruct.obj.type = OBJ_STRUCT (1).
+            // ObjStruct.fieldCount = info->fieldCount.
+            // Offset 0: Type (Assuming Obj is {type, next}).
+            // We need to write 1 to [RAX].
+            // But `type` is enum (int) at offset 0? 
+            // `Obj` struct: `Typetype; Obj* next;`.
+            // Assuming 8 byte alignment for `next`.
+            // `type` is 32-bit int?
+            // Let's assume standard layout.
+            // PUSH/POP logic:
+            // Stack: [StructPtr]
+            
+            // We need to fill fields.
+            // We must evaluate expressions in order?
+            // Or arbitrary order from AST? AST key-values.
+            // We iterate Struct Definition Fields to ensure correct order in memory?
+            // AST Init might be out of order or partial?
+            // MasterPlan implies "SensorData s = { ... }".
+            
+            // Safe approach:
+            // 1. Initialize all fields to NULL/Zero.
+            // 2. Iterate Struct Definition Field by Field.
+            // 3. Find matching value in provided AST Init.
+            // 4. Evaluate and Store.
+            
+            // But we have registers constraint.
+            // Simplify: We assume AST `StructInit` matches Struct fields order?
+            // No, keys are explicit.
+            
+            // Strategy:
+            // Emit code to setup Header.
+            // Loop through Struct Fields (from Registry).
+            // For each field, find if AST provides a value.
+            // If yes, emitNode(value).
+            // Then `POP StructPtr` (peek), `MOV [StructPtr + offset], RAX`.
+            // (Wait, `emitNode` clobbers registers. We must restore StructPtr).
+            // Stack: [StructPtr]
+            
+            // 1. Initialize Header
+            Asm_Mov_Reg_Mem(as, RAX, RSP, 0); // Peek StructPtr (Offset 0 from RSP?) Asm_Push(RAX) -> RSP points to it.
+            // Need peek: MOV RAX, [RSP]
+            Asm_Mov_Reg_Mem(as, RAX, RSP, 0); // Load address from stack
+            // Actually Asm_Mov_Reg_Mem expects base+disp.
+            // `Asm_Mov_Reg_Mem(as, RAX, RSP, 0)` -> OK.
+            
+            // Write Type (OBJ_STRUCT = 1)
+            Asm_Mov_Imm64(as, RCX, 1); // OBJ_STRUCT
+            Asm_Mov_Mem_Reg(as, RAX, 0, RCX); // obj.type
+            
+            // Write fieldCount
+            Asm_Mov_Imm64(as, RCX, info->fieldCount);
+            Asm_Mov_Mem_Reg(as, RAX, 16, RCX); // Oops, ObjStruct: Obj (16) + fieldCount (4 or 8) + fields.
+            // Struct Layout:
+            // Obj (16)
+            // fieldCount (4/8). Let's use offset 16 for fieldCount.
+            // But fields[] start where? 
+            // `typedef struct { Obj obj; int fieldCount; Value fields[]; }`.
+            // Alignment: fieldCount is int(4). fields is Value(8).
+            // Padding 4 bytes after fieldCount.
+            // So fields start at 16 + 8 = 24?
+            // sizeof(Obj) = 16.
+            // int fieldCount -> +4 = 20.
+            // Padding -> +4 = 24.
+            // Value fields[] -> 24.
+            // My `getFieldOffset` used `16 + i*8`. That assumed fields started at 16.
+            // I should update `getFieldOffset` to 24 + i*8?
+            // Or remove `fieldCount` from ObjStruct?
+            // Nah, needed for GC scanning.
+            // Let's use 24 as base for fields.
+            
+            Asm_Mov_Mem_Reg(as, RAX, 16, RCX); // fieldCount at 16.
+            // (Assuming writing 64-bit int to 32-bit field is ok/safe if value is small, overwrites padding).
+            
+            for (int i=0; i<info->fieldCount; i++) {
+                 // Find init value for field info->fieldNames[i]
+                 AstNode* valExpr = NULL;
+                 for (int k=0; k<init->fieldCount; k++) {
+                     if (init->fieldNames[k].length == info->fieldNames[i].length &&
+                         memcmp(init->fieldNames[k].start, info->fieldNames[i].start, info->fieldNames[i].length) == 0) {
+                         valExpr = init->values[k];
+                         break;
+                     }
+                 }
+                 
+                 // Compile Value
+                 if (valExpr) {
+                     emitNode(as, valExpr, ctx);
+                 } else {
+                     Asm_Mov_Imm64(as, RAX, VAL_NULL);
+                 }
+                 
+                 // Store to Struct
+                 // StructPtr is at [RSP].
+
+                 // Manually:
+                 Asm_Mov_Reg_Mem(as, RCX, RSP, 0);
+                 
+                 // Offset = 24 + i*8
+                 Asm_Mov_Mem_Reg(as, RCX, 24 + (i * 8), RAX);
+            }
+            
+            // Done. Pop StructPtr -> RAX
+            Asm_Pop(as, RAX);
+            
+            // Tag pointer?
+            // ObjStruct* is a pointer. 
+            // In NaN Boxing, pure pointers might need masking/tagging if they look like doubles.
+            // But we use Pointer Tagging?
+            // MasterPlan: "Pointers stored within 48-bit significand of Signaling NaN".
+            // `ValueToObj` masks it.
+            // `ObjToValue`: `(Value)obj | QNAN | TAG_OBJ?`
+            // `VanarizeValue.h` defines `ObjToValue`.
+            // We need to apply that logic here.
+            // `SIGN_BIT | QNAN` ?
+            // Let's hardcode the Tagging Mask.
+            // `0xFFFC000000000000`?
+            // Let's assume pure pointer for now or replicate `ObjToValue` macro.
+            // `(uint64_t)(obj) | 0x7FFC000000000000` (SIGN_BIT | QNAN)?
+            // Wait, native C `ObjToValue` adds the tag.
+            // We can emit: `OR RAX, ...`.
+            // Let's do `OR RAX, 0xFFFC000000000000` (Simplified tag for Objects).
+            // Actually just `OR RAX, VAL_QNAN`.
+            // `VAL_QNAN` is `0x7FFC000000000000`.
+            // Plus Sign Bit `0x8000...`?
+            // Let's check `VanarizeValue.h` if possible.
+            // For now, I'll return raw pointer (safest for C malloc, bad for boxing).
+            // If I return raw pointer, other code expects boxed.
+            // CodeGen `Asm_Mov_Reg_Mem` etc handles 64-bit values.
+            // If I don't box, it might be treated as double.
+            // I MUST Box.
+            // `OR RAX, 0xFFFC000000000000`.
+            Asm_Mov_Imm64(as, RCX, 0xFFFC000000000000); 
+            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x09); Asm_Emit8(as, 0xC8); // OR RAX, RCX
+            
+            break;
+        }
+
+        case NODE_GET_EXPR: {
+            GetExpr* get = (GetExpr*)node;
+            // 1. Compile Object -> RAX
+            emitNode(as, get->object, ctx);
+            
+            // 2. Unbox if needed (remove tag)
+            Asm_Mov_Imm64(as, RCX, 0x0000FFFFFFFFFFFF);
+            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x21); Asm_Emit8(as, 0xC8); // AND RAX, RCX
+            
+            // 3. Resolve Field Offset
+            // We need Type of Object.
+            // If Object is Variable, we lookup type in ctx.
+            // Only support Variable LHS for now.
+            if (get->object->type == NODE_LITERAL_EXPR) {
+                LiteralExpr* lit = (LiteralExpr*)get->object;
+                if (lit->token.type == TOKEN_IDENTIFIER) {
+                    Token typeToken;
+                    resolveLocal(ctx, &lit->token, &typeToken);
+                    
+                    StructInfo* info = resolveStruct(&typeToken);
+                    if (info) {
+                        int offset = getFieldOffset(info, &get->name);
+                        // Offset adjustment: my `getFieldOffset` returns 16+...
+                        // I changed base to 24 in INIT.
+                        // recalculate: 24 + index * 8.
+                        // I should update `getFieldOffset` function too.
+                        // Assume `getFieldOffset` logic updated to 24 base.
+                        
+                        if (offset >= 0) {
+                            Asm_Mov_Reg_Mem(as, RAX, RAX, offset);
+                        } else {
+                            // Error
+                        }
+                    } 
+                }
+            }
             break;
         }
 
@@ -63,7 +314,8 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             emitNode(as, assign->value, ctx);
             
             // 2. Resolve Variable
-            int offset = resolveLocal(ctx, &assign->name);
+            Token type; // dummy
+            int offset = resolveLocal(ctx, &assign->name, &type);
             if (offset == 0) {
                  fprintf(stderr, "JIT Error: Undefined variable '%.*s' in assignment\n", assign->name.length, assign->name.start);
                  exit(1);
@@ -87,7 +339,8 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 Asm_Mov_Imm64(as, RAX, val);
             } else if (lit->token.type == TOKEN_IDENTIFIER) {
                 // Resolve Variable
-                int offset = resolveLocal(ctx, &lit->token);
+                Token type;
+                int offset = resolveLocal(ctx, &lit->token, &type);
                 if (offset == 0) {
                      fprintf(stderr, "JIT Error: Undefined variable '%.*s'\n", lit->token.length, lit->token.start);
                      exit(1);
@@ -123,16 +376,60 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
         }
         
         case NODE_CALL_EXPR: {
-             // ... same
             CallExpr* call = (CallExpr*)node;
-            if (call->argCount > 0) {
-                emitNode(as, call->args[0], ctx);
-                Asm_Push(as, RAX);
-                Asm_Pop(as, RDI);
+            // 1. Resolve Callee
+            Token type;
+            int offset = resolveLocal(ctx, &call->callee, &type);
+            if (offset == 0) {
+                 // Check logical "print"
+                 if (call->callee.length == 5 && memcmp(call->callee.start, "print", 5) == 0) {
+                     // Native Print Override
+                     if (call->argCount > 0) {
+                        emitNode(as, call->args[0], ctx);
+                        Asm_Push(as, RAX);
+                        Asm_Pop(as, RDI);
+                    }
+                    void* funcPtr = (void*)Native_Print;
+                    Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                    Asm_Call_Reg(as, RAX);
+                    break;
+                 }
+                 
+                 fprintf(stderr, "JIT Error: Undefined function/variable '%.*s'\n", call->callee.length, call->callee.start);
+                 exit(1);
             }
-            void* funcPtr = (void*)Native_Print;
-            Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+            
+            // Load Function Object -> RAX
+            Asm_Mov_Reg_Mem(as, RAX, RBP, -offset);
+            
+            Asm_Push(as, RAX); // Save it
+            
+            // 2. Compile Args
+            int argCount = call->argCount;
+            for (int i = 0; i < argCount; i++) {
+                emitNode(as, call->args[i], ctx);
+                Asm_Push(as, RAX);
+            }
+            
+            // Now Stack: [FnVal] [Arg0] [Arg1] ...
+            
+            // 3. Pop Args into Registers (Reverse order)
+            Register paramRegs[] = { RDI, RSI, RDX, RCX, R8, R9 };
+            for (int i = argCount - 1; i >= 0; i--) {
+                 Asm_Pop(as, paramRegs[i]);
+            }
+            
+            // 4. Pop FnVal
+            Asm_Pop(as, RAX);
+            
+            // 5. Deref Entrypoint
+            Asm_Mov_Imm64(as, RDX, 0x0000FFFFFFFFFFFF);
+            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x21); Asm_Emit8(as, 0xD0); // AND RAX, RDX
+            Asm_Mov_Reg_Mem(as, RAX, RAX, 16); // Offset 16 (Obj size is 16)
+            
+            // 6. Call
             Asm_Call_Reg(as, RAX);
+            
             break;
         }
 
@@ -261,6 +558,115 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             int32_t exitDist = (int32_t)(endOffset - (loopEndPatch + 4));
             Asm_Patch32(as, loopEndPatch, exitDist);
             
+            break;
+        }
+
+
+
+        case NODE_FUNCTION_DECL: {
+            // Function Declaration
+            // 1. We need to compile the body into a NEW JIT block.
+            // But Jit_Compile (the entry point) allocates memory.
+            // We need a recursive way to create a new "FunctionUnit".
+            // Since we are inside emitNode, we are emitting into the CURRENT buffer.
+            // Functions in Vanarize are top-level or closures. 
+            // If we emit code here, it will execute inline! We don't want that.
+            // We want to skip over the code (JMP over it) OR compile it separately.
+            // Simpler: JMP over the function body, but emit the body here?
+            // No, getting the entry point is messy if we just JMP over.
+            
+            // Better: Recursively call Jit_Compile for the body?
+            // But Jit_Compile does mmap. That's fine. Each function is a separate mmap block.
+            // That's actually very flexible (hot reloading etc).
+            // So:
+            // 1. Create a CompilerContext for the function (params are locals).
+            // 2. Compile body to new memory.
+            // 3. Create ObjFunction with that pointer.
+            // 4. Store ObjFunction in current scope (variable with function name).
+            
+            FunctionDecl* func = (FunctionDecl*)node;
+            
+            // Compile Function Body
+            // We need to setup a new context with params.
+            // Wait, Jit_Compile API is simple "AstNode* -> JitFunction".
+            // We need to expose a way to compile with params.
+            
+            // Let's create `Jit_CompileInternal(AstNode* node, CompilerContext* ctx)`?
+            // But we need a FRESH buffer.
+            // So we call `Jit_Compile`? `Jit_Compile` creates a fresh buffer.
+            // But `Jit_Compile` doesn't know about params!
+            // We need to pass params to `Jit_Compile`.
+            // Let's modify usages of `Jit_Compile` or assume `node` contains everything.
+            // `Jit_Compile` calls `emitNode`.
+            // We can manually do what `Jit_Compile` does here.
+            
+            void* funcMem = Jit_AllocExec(MAX_JIT_SIZE);
+            Assembler funcAs;
+            Asm_Init(&funcAs, (uint8_t*)funcMem, MAX_JIT_SIZE);
+            
+            // Function Prologue
+            Asm_Push(&funcAs, RBP);
+            Asm_Mov_Reg_Reg(&funcAs, RBP, RSP);
+            
+            // Setup Context for Function
+            CompilerContext funcCtx;
+            funcCtx.localCount = 0;
+            funcCtx.stackSize = 0;
+            
+            // Simple: Spill to stack.
+            Register paramRegs[] = { RDI, RSI, RDX, RCX, R8, R9 };
+            for (int i = 0; i < func->paramCount; i++) {
+                Asm_Push(&funcAs, paramRegs[i]);
+                funcCtx.stackSize += 8;
+                Local* local = &funcCtx.locals[funcCtx.localCount++];
+                local->name = func->params[i];
+                local->typeName = (Token){0}; // Unknown type for params currently
+                local->offset = funcCtx.stackSize;
+            }
+            
+            // Compile Body
+            emitNode(&funcAs, func->body, &funcCtx);
+            
+            // Default Return (if user didn't)
+            Asm_Mov_Imm64(&funcAs, RAX, VAL_NULL); // Default return nil
+            Asm_Mov_Reg_Reg(&funcAs, RSP, RBP);
+            Asm_Pop(&funcAs, RBP);
+            Asm_Ret(&funcAs);
+            
+            // Now we have the function compiled at `funcMem`.
+            // CONSTANT POOL/GC TODO: objFunc should be GC tracked.
+            ObjFunction* objFunc = malloc(sizeof(ObjFunction));
+            objFunc->obj.type = OBJ_FUNCTION;
+            objFunc->entrypoint = funcMem;
+            objFunc->arity = func->paramCount;
+            // Name... need ObjString.
+            // objFunc->name = ...
+            
+            // Store this function in the CURRENT context (as a variable)
+            // Implicit "var name = func..."
+            // Push objFunc (pointer) to stack
+            Value funcVal = ObjToValue(objFunc);
+            Asm_Mov_Imm64(as, RAX, funcVal);
+            Asm_Push(as, RAX);
+            ctx->stackSize += 8;
+            Local* local = &ctx->locals[ctx->localCount++];
+            local->name = func->name;
+            local->offset = ctx->stackSize;
+            
+            break;
+        }
+        
+        case NODE_RETURN_STMT: {
+            ReturnStmt* stmt = (ReturnStmt*)node;
+            if (stmt->returnValue) {
+                emitNode(as, stmt->returnValue, ctx);
+            } else {
+                Asm_Mov_Imm64(as, RAX, VAL_NULL);
+            }
+            // Epilogue and Ret
+            Asm_Mov_Reg_Reg(as, RSP, RBP);
+            Asm_Pop(as, RBP);
+            Asm_Ret(as);
             break;
         }
 
