@@ -1,8 +1,11 @@
 #include "Jit/CodeGen.h"
 #include "Jit/AssemblerX64.h"
 #include "Jit/ExecutableMemory.h"
-#include "Core/Native.h"
+#include "Core/VanarizeValue.h"
 #include "Core/VanarizeObject.h"
+#include "Core/Memory.h"
+#include "Core/GarbageCollector.h"
+#include "Core/Native.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -125,10 +128,35 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // For now, use `malloc`.
             
             Asm_Mov_Imm64(as, RDI, size);
-            void* mallocPtr = (void*)malloc; // Address of malloc
+            void* mallocPtr = (void*)MemAlloc;
             Asm_Mov_Reg_Ptr(as, RAX, mallocPtr);
             Asm_Call_Reg(as, RAX);
-            // RAX now has pointer. PUSH it to save while evaluating fields.
+            
+            // RAX now has pointer
+            // Initialize Obj header
+            Asm_Push(as, RAX); // Save pointer
+            
+            // MOV RCX, RAX (copy pointer)
+            Asm_Mov_Reg_Reg(as, RCX, RAX);
+            
+            // Set type = OBJ_STRUCT (1)
+            Asm_Mov_Imm64(as, RDX, 1);
+            Asm_Mov_Mem_Reg(as, RCX, 0, RDX);
+            
+            // Set isMarked = false (0)
+            Asm_Mov_Imm64(as, RDX, 0);
+            Asm_Mov_Mem_Reg(as, RCX, 4, RDX); // Assuming bool is 4 bytes aligned
+            
+            // Register with GC
+            Asm_Mov_Reg_Reg(as, RDI, RAX); // First arg = obj
+            void* gcRegPtr = (void*)GC_RegisterObject;
+            Asm_Mov_Reg_Ptr(as, RAX, gcRegPtr);
+            Asm_Call_Reg(as, RAX);
+            
+            // Restore pointer
+            Asm_Pop(as, RAX);
+            
+            // PUSH it to save while evaluating fields.
             Asm_Push(as, RAX);
             
             // Set Type/Header

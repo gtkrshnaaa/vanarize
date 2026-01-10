@@ -1,4 +1,5 @@
 #include "Core/Memory.h"
+#include "Core/GarbageCollector.h"
 #include <sys/mman.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,9 +7,16 @@
 
 #define HEAP_SIZE (1024 * 1024 * 256) // 256 MB for the Nursery (Initial Proof of Concept)
 
-static char* heapStart = NULL;
-static char* heapPtr = NULL;
+// Export for GC
+char* heapStart = NULL;
+char* heapPtr = NULL;
 static char* heapEnd = NULL;
+
+void GC_ResetHeap(void) {
+    // Reset bump pointer (WARNING: This invalidates all pointers!)
+    // A proper GC would copy live objects
+    heapPtr = heapStart;
+}
 
 void VM_InitMemory(void) {
     // Allocate a large contiguous block using mmap
@@ -29,14 +37,27 @@ void VM_InitMemory(void) {
 }
 
 void* MemAlloc(size_t size) {
+    // Align to 8 bytes
+    size = (size + 7) & ~7;
+    
     if (heapPtr + size > heapEnd) {
-        // Trigger GC would happen here
-        fprintf(stderr, "[Vanarize Core] OOM: Nursery Exhausted.\n");
-        exit(1);
+        // Trigger GC
+        fprintf(stderr, "[Vanarize Core] Nursery full, triggering GC...\n");
+        GC_Collect();
+        
+        // Check again after GC
+        if (heapPtr + size > heapEnd) {
+            fprintf(stderr, "[Vanarize Core] OOM: Nursery Exhausted after GC.\n");
+            exit(1);
+        }
     }
     
     void* result = heapPtr;
     heapPtr += size;
+    
+    // Register with GC if it's an object
+    // Caller must cast to Obj* and initialize type/next
+    
     return result;
 }
 

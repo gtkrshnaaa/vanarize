@@ -2,6 +2,7 @@
 #define VANARIZE_CORE_OBJECT_H
 
 #include "Core/VanarizeValue.h"
+#include <stdbool.h>
 #include <string.h>
 
 typedef enum {
@@ -14,7 +15,8 @@ typedef struct Obj Obj;
 
 struct Obj {
     ObjType type;
-    Obj* next; // GC chain
+    bool isMarked;       // GC marking flag
+    struct Obj* next;    // Intrusive linked list of all objects
 };
 
 typedef struct {
