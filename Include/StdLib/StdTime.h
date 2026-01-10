@@ -12,4 +12,8 @@ void StdTime_Sleep(uint64_t ms);
 
 // Start/stop measurement timer
 // First call starts timer, second call returns elapsed nanoseconds
+// Start/stop measurement timer
+// First call starts timer, second call returns elapsed nanoseconds
+Value StdTime_Measure(void);
+
 #endif // VANARIZE_STDLIB_TIME_H
