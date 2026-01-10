@@ -745,8 +745,12 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
 }
 
 JitFunction Jit_Compile(AstNode* root) {
+    // First pass: compile all declarations (functions, structs, etc.)
+    // This pass populates global symbol tables and compiles function bodies into separate blocks.
+    // The 'as' assembler here is a temporary one, its output is not directly used for the final entry point.
+    uint8_t tempBuffer[MAX_JIT_SIZE];
     Assembler as;
-    Asm_Init(&as);
+    Asm_Init(&as, tempBuffer, MAX_JIT_SIZE);
     
     CompilerContext ctx = {0};
     
@@ -764,8 +768,8 @@ JitFunction Jit_Compile(AstNode* root) {
     // For now, we need to search the AST for Main function
     
     // Create entry point that calls Main()
-    void* code = Jit_AllocExec(as.size);
-    memcpy(code, as.code, as.size);
+    // void* code = Jit_AllocExec(as.size);
+    // memcpy(code, as.code, as.size);
     
     // Find Main function in the compiled code
     // For simple case: root is BlockStmt with function declarations
@@ -784,8 +788,9 @@ JitFunction Jit_Compile(AstNode* root) {
                     // Solution: compile Main() body directly as entry point
                     
                     // Re-compile just Main's body as the entry point
+                    uint8_t mainBuffer[MAX_JIT_SIZE];
                     Assembler mainAs;
-                    Asm_Init(&mainAs);
+                    Asm_Init(&mainAs, mainBuffer, MAX_JIT_SIZE);
                     CompilerContext mainCtx = {0};
                     
                     // Function prologue
@@ -803,8 +808,8 @@ JitFunction Jit_Compile(AstNode* root) {
                     Asm_Pop(&mainAs, RBP);
                     Asm_Ret(&mainAs);
                     
-                    void* mainCode = Jit_AllocExec(mainAs.size);
-                    memcpy(mainCode, mainAs.code, mainAs.size);
+                    void* mainCode = Jit_AllocExec(mainAs.position);
+                    memcpy(mainCode, mainAs.buffer, mainAs.position);
                     
                     return (JitFunction)mainCode;
                 }
