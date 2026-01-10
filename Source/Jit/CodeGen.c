@@ -436,14 +436,26 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
         
         case NODE_CALL_EXPR: {
             CallExpr* call = (CallExpr*)node;
-            // 1. Resolve Callee
-            Token type;
-            int offset = resolveLocal(ctx, &call->callee, &type);
-            if (offset == 0) {
-                 // Check logical "print"
-                 if (call->callee.length == 5 && memcmp(call->callee.start, "print", 5) == 0) {
-                     // Native Print Override
-                     if (call->argCount > 0) {
+            
+            // Callee is now AstNode*, can be:
+            // 1. NODE_LITERAL_EXPR (simple function name like "print", "Main")
+            // 2. NODE_GET_EXPR (namespace.method like "StdTime.Now")
+            
+            // Compile callee to get function pointer in RAX
+            if (call->callee->type == NODE_GET_EXPR) {
+                // Namespace.method - GET_EXPR handler will put function pointer in RAX
+                emitNode(as, call->callee, ctx);
+                Asm_Push(as, RAX); // Save function pointer
+            }
+            else if (call->callee->type == NODE_LITERAL_EXPR) {
+                // Simple identifier
+                LiteralExpr* lit = (LiteralExpr*)call->callee;
+                Token calleeName = lit->token;
+                
+                // Check built-in print
+                if (calleeName.length == 5 && memcmp(calleeName.start, "print", 5) == 0) {
+                    // Special case: print - call directly
+                    if (call->argCount > 0) {
                         emitNode(as, call->args[0], ctx);
                         Asm_Push(as, RAX);
                         Asm_Pop(as, RDI);
@@ -452,67 +464,41 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
                     Asm_Call_Reg(as, RAX);
                     break;
-                 }
-                 // Check StdTime functions
-                 if (call->callee.length == 10 && memcmp(call->callee.start, "StdTimeNow", 10) == 0) {
-                     void* funcPtr = (void*)StdTime_Now;
-                     Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
-                     Asm_Call_Reg(as, RAX);
-                     break;
-                 }
-                 if (call->callee.length == 14 && memcmp(call->callee.start, "StdTimeMeasure", 14) == 0) {
-                     void* funcPtr = (void*)StdTime_Measure;
-                     Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
-                     Asm_Call_Reg(as, RAX);
-                     break;
-                 }
-                 if (call->callee.length == 12 && memcmp(call->callee.start, "StdTimeSleep", 12) == 0) {
-                     // StdTimeSleep(ms) - takes 1 arg
-                     if (call->argCount > 0) {
-                         emitNode(as, call->args[0], ctx);
-                         // Convert double to uint64_t in RDI
-                         Asm_Mov_Reg_Reg(as, RDI, RAX);
-                     }
-                     void* funcPtr = (void*)StdTime_Sleep;
-                     Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
-                     Asm_Call_Reg(as, RAX);
-                     break;
-                 }
-                 
-                 fprintf(stderr, "JIT Error: Undefined function/variable '%.*s'\n", call->callee.length, call->callee.start);
-                 exit(1);
+                }
+                
+                // Try to resolve as local variable (function stored in local)
+                Token type;
+                int offset = resolveLocal(ctx, &calleeName, &type);
+                if (offset != 0) {
+                    Asm_Mov_Reg_Mem(as, RAX, RBP, -offset);
+                    Asm_Push(as, RAX);
+                } else {
+                    fprintf(stderr, "JIT Error: Undefined function '%.*s'\n", calleeName.length, calleeName.start);
+                    exit(1);
+                }
+            }
+            else {
+                fprintf(stderr, "JIT Error: Invalid callee type\n");
+                exit(1);
             }
             
-            // Load Function Object -> RAX
-            Asm_Mov_Reg_Mem(as, RAX, RBP, -offset);
-            
-            Asm_Push(as, RAX); // Save it
-            
-            // 2. Compile Args
-            int argCount = call->argCount;
-            for (int i = 0; i < argCount; i++) {
+            // Compile arguments
+            for (int i = 0; i < call->argCount; i++) {
                 emitNode(as, call->args[i], ctx);
                 Asm_Push(as, RAX);
             }
             
-            // Now Stack: [FnVal] [Arg0] [Arg1] ...
-            
-            // 3. Pop Args into Registers (Reverse order)
-            Register paramRegs[] = { RDI, RSI, RDX, RCX, R8, R9 };
-            for (int i = argCount - 1; i >= 0; i--) {
-                 Asm_Pop(as, paramRegs[i]);
+            // Pop args into registers (System V ABI)
+            Register paramRegs[] = {RDI, RSI, RDX, RCX, R8, R9};
+            for (int i = call->argCount - 1; i >= 0; i--) {
+                if (i < 6) {
+                    Asm_Pop(as, paramRegs[i]);
+                }
             }
             
-            // 4. Pop FnVal
-            Asm_Pop(as, RAX);
-            
-            // 5. Deref Entrypoint
-            Asm_Mov_Imm64(as, RDX, 0x0000FFFFFFFFFFFF);
-            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x21); Asm_Emit8(as, 0xD0); // AND RAX, RDX
-            Asm_Mov_Reg_Mem(as, RAX, RAX, 16); // Offset 16 (Obj size is 16)
-            
-            // 6. Call
-            Asm_Call_Reg(as, RAX);
+            // Pop function pointer and call
+            Asm_Pop(as, RCX);
+            Asm_Call_Reg(as, RCX);
             
             break;
         }

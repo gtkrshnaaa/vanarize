@@ -7,7 +7,7 @@ function Main() {
     number sum = 0;
     
     // Start measurement
-    StdTimeMeasure();
+    StdTime.Measure();
     
     // Arithmetic loop
     i = 0;
@@ -18,12 +18,9 @@ function Main() {
     }
     
     // Stop and get elapsed time (nanoseconds)
-    number elapsed = StdTimeMeasure();
+    number elapsed = StdTime.Measure();
     
     // Calculate operations per second
-    // ops/sec = iterations / (elapsed_seconds)
-    // ops/sec = iterations / (elapsed / 1e9)
-    // ops/sec = iterations * 1e9 / elapsed
     number billion = 1000000000;
     number opsPerSec = iterations * billion / elapsed;
     

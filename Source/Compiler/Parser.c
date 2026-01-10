@@ -130,12 +130,7 @@ static AstNode* call() {
             advance();
             CallExpr* node = malloc(sizeof(CallExpr));
             node->main.type = NODE_CALL_EXPR;
-            // node->callee = ... wait, expr must be identifier for now
-            // Simplified: We assume current expr is an identifier.
-            // But `expr` is an AstNode. We can't easily extract the token from generic node without casting.
-            // Let's assume for this stage: calls only on identifiers.
-            // Check if expr is a variable usage (which we haven't implemented yet, but primary parses identifiers?)
-            // Actually primary() didn't parse identifiers in previous step.
+            node->callee = expr; // Store the expression (identifier or GET_EXPR for namespace.method)
             
             // We need to store arguments.
             node->args = malloc(sizeof(AstNode*) * 8); // Max 8 args for now
@@ -148,11 +143,6 @@ static AstNode* call() {
             }
             
             consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
-            
-            // Hack for callee name since we don't have Var access yet
-            // If expr was NODE_LITERAL_EXPR (but type identifier?), wait primary handles literal.
-            // We need primary to handle identifiers.
-            node->callee = ((LiteralExpr*)expr)->token; // Unsafe cast, need primary update
             
             expr = (AstNode*)node;
         } else if (currentToken.type == TOKEN_DOT) {

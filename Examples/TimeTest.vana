@@ -1,9 +1,5 @@
-// Simple timing test
-function TestTiming() {
-    number x = StdTimeNow();
-    print(x);
-}
-
+// Test StdTime.Now() namespace syntax
 function Main() {
-    TestTiming();
+    number x = StdTime.Now();
+    print(x);
 }

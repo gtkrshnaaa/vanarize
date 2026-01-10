@@ -64,7 +64,7 @@ typedef struct {
 
 typedef struct {
     AstNode main;
-    Token callee; // Identifier
+    AstNode* callee; // Changed from Token to support namespace.method
     AstNode** args;
     int argCount;
 } CallExpr;
