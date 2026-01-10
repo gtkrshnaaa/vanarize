@@ -4,8 +4,13 @@
 
 void Native_Print(Value val) {
     if (IsNumber(val)) {
-        // Warning: using raw int for tests, but normally double
-        printf("%ld\n", (long)val);
+        double num = ValueToNumber(val);
+        // Print as integer if it's a whole number, otherwise as float
+        if (num == (long)num) {
+            printf("%ld\n", (long)num);
+        } else {
+            printf("%g\n", num);
+        }
     } else if (IsString(val)) {
         printf("%s\n", AsCString(val));
     } else if (IsBool(val)) {
