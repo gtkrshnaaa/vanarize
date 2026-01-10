@@ -1,4 +1,5 @@
 // Test StdTime.Now() namespace syntax
+// Master Plan Compliance: StdTime usage
 function Main() {
     number x = StdTime.Now();
     print(x);
