@@ -1,4 +1,5 @@
 // VANARIZE TEST: Control Flow (If-Else, While Loop)
+// Master Plan Compliance: Typed Variables, C-style loops
 
 function Main() {
     number counter = 0;
