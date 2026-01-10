@@ -23,6 +23,20 @@ typedef struct {
     char chars[]; // Flexible array member
 } ObjString;
 
+typedef struct {
+    Obj obj;
+    void* entrypoint; // JIT Code Pointer
+    int arity;
+
+    ObjString* name;
+} ObjFunction;
+
+typedef struct {
+    Obj obj;
+    int fieldCount;
+    Value fields[]; // Flexible array
+} ObjStruct;
+
 static inline ObjType GetObjType(Value v) {
     Obj* obj = (Obj*)ValueToObj(v);
     return obj->type;
