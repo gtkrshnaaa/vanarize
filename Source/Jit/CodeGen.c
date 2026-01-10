@@ -491,8 +491,46 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // 2. NODE_GET_EXPR (namespace.method like "StdTime.Now")
             
             // Compile callee to get function pointer in RAX
+            // Compile callee to get function pointer in RAX
             if (call->callee->type == NODE_GET_EXPR) {
-                // Namespace.method - GET_EXPR handler will put function pointer in RAX
+                // Check for Intrinsic Namespaces (e.g. StdTime.Now)
+                GetExpr* get = (GetExpr*)call->callee;
+                if (get->object->type == NODE_LITERAL_EXPR) {
+                    LiteralExpr* lit = (LiteralExpr*)get->object;
+                    Token ns = lit->token;
+                    Token method = get->name;
+                    
+                    // Namespace: StdTime
+                    if (ns.length == 7 && memcmp(ns.start, "StdTime", 7) == 0) {
+                        void* funcPtr = NULL;
+                        
+                        if (method.length == 3 && memcmp(method.start, "Now", 3) == 0) {
+                             funcPtr = (void*)StdTime_Now;
+                        } else if (method.length == 7 && memcmp(method.start, "Measure", 7) == 0) {
+                             funcPtr = (void*)StdTime_Measure;
+                        } else if (method.length == 5 && memcmp(method.start, "Sleep", 5) == 0) {
+                             // Sleep(ms) - 1 arg
+                             if (call->argCount > 0) {
+                                 emitNode(as, call->args[0], ctx);
+                                 Asm_Push(as, RAX); 
+                                 Asm_Pop(as, RDI); // Arg1
+                             }
+                             funcPtr = (void*)StdTime_Sleep;
+                             Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                             Asm_Call_Reg(as, RAX);
+                             break;
+                        }
+                        
+                        // For Now() and Measure(), they return non-void
+                        if (funcPtr) {
+                            Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                            Asm_Call_Reg(as, RAX);
+                            break;
+                        }
+                    }
+                }
+
+                // Namespace.method - Default GET_EXPR handler
                 emitNode(as, call->callee, ctx);
                 Asm_Push(as, RAX); // Save function pointer
             }
