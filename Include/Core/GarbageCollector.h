@@ -5,7 +5,7 @@
 #include "Core/VanarizeValue.h"
 
 // Initialize GC subsystem
-void GC_Init(void);
+void GC_Init(void* stackBase);
 
 // Trigger a full Mark-and-Sweep garbage collection cycle
 void GC_Collect(void);
