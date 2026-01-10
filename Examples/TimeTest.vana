@@ -1,6 +1,6 @@
 // Simple timing test
 function TestTiming() {
-    number x = StdTime.Now();
+    number x = StdTimeNow();
     print(x);
 }
 

@@ -7,18 +7,17 @@ function BenchmarkArithmetic() :: number {
     number result = 0;
     
     // Start timer
-    number start = StdTime.Measure();
+    StdTimeMeasure();
     
     while (i < iterations) {
         result = result + i;
         i = i + 1;
     }
     
-    // Stop timer
-    number elapsed = StdTime.Measure();
+    // Stop timer and get elapsed nanoseconds
+    number elapsed = StdTimeMeasure();
     
     // Calculate ops/sec
-    // elapsed is in nanoseconds
     // ops/sec = iterations / (elapsed / 1e9)
     number opsPerSec = iterations * 1000000000 / elapsed;
     
