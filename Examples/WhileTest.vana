@@ -1,4 +1,5 @@
 // Test while loop parsing
+// Master Plan Compliance: Typed Variables, C-style loops
 function Main() {
     number i = 0;
     while (i < 5) {
