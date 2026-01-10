@@ -145,9 +145,25 @@ void Asm_Mov_Mem_Reg(Assembler* as, Register base, int32_t offset, Register src)
 // CMP r64, imm32
 // Opcode: 48 81 /7 id
 void Asm_Cmp_Reg_Imm(Assembler* as, Register dst, int32_t imm) {
-        Asm_Emit8(as, (uint8_t)(imm & 0xFF));
-        imm >>= 8;
-    }
+    // CMP r64, imm32: 48 81 /7 id
+    Asm_Emit8(as, 0x48); // REX.W
+    Asm_Emit8(as, 0x81); // CMP opcode
+    uint8_t modrm = ModRM(MOD_DIRECT, 7, dst);  // /7 for CMP
+    Asm_Emit8(as, modrm);
+    
+    // Emit imm32 (little-endian)
+    Asm_Emit8(as, imm & 0xFF);
+    Asm_Emit8(as, (imm >> 8) & 0xFF);
+    Asm_Emit8(as, (imm >> 16) & 0xFF);
+    Asm_Emit8(as, (imm >> 24) & 0xFF);
+}
+
+void Asm_Cmp_Reg_Reg(Assembler* as, Register dst, Register src) {
+    // CMP r64, r64: 48 39 /r
+    Asm_Emit8(as, 0x48); // REX.W
+    Asm_Emit8(as, 0x39); // CMP opcode
+    uint8_t modrm = ModRM(MOD_DIRECT, src, dst);
+    Asm_Emit8(as, modrm);
 }
 
 // JMP rel32
