@@ -1,4 +1,5 @@
 // Minimal while test
+// Master Plan Compliance: Typed Variables, C-style loops
 function Main() {
     number i = 0;
     while (i < 3) {
