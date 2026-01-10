@@ -39,13 +39,18 @@ typedef struct {
     Value fields[]; // Flexible array
 } ObjStruct;
 
-static inline ObjType GetObjType(Value v) {
-    Obj* obj = (Obj*)ValueToObj(v);
+// Helper to cast Value to String
+ObjString* AsString(Value value);
+
+// Helper to check object type
+static inline ObjType GetObjType(Value value) {
+    if (!IsObj(value)) return (ObjType)-1;
+    Obj* obj = (Obj*)ValueToObj(value);
     return obj->type;
 }
 
-static inline bool IsString(Value v) {
-    return IsObj(v) && GetObjType(v) == OBJ_STRING;
+static inline bool IsString(Value value) {
+    return GetObjType(value) == OBJ_STRING;
 }
 
 static inline char* AsCString(Value v) {
