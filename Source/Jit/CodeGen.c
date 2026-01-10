@@ -88,12 +88,17 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             } else {
                 Asm_Mov_Imm64(as, RAX, VAL_NULL);
             }
-            Asm_Push(as, RAX);
+            
+            // Allocate stack space for this variable
             ctx->stackSize += 8;
-            Local* local = &ctx->locals[ctx->localCount++];
-            local->name = decl->name;
-            local->typeName = decl->typeName; // Store type
-            local->offset = ctx->stackSize;
+            ctx->locals[ctx->localCount].name = decl->name;
+            ctx->locals[ctx->localCount].typeName = decl->typeName;
+            ctx->locals[ctx->localCount].offset = ctx->stackSize;
+            ctx->localCount++;
+            
+            // Store RAX (the value) into [RBP - offset]
+            Asm_Mov_Mem_Reg(as, RBP, -ctx->stackSize, RAX);
+            
             break;
         }
 
