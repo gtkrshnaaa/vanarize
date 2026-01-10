@@ -522,43 +522,59 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 
                 // Emit right operand -> RAX
                 emitNode(as, bin->right, ctx);
-                Asm_Mov_Reg_Reg(as, RCX, RAX); // right in RCX
-                Asm_Pop(as, RAX); // left in RAX
                 
-                // Compare: CMP RAX, RCX (compares left vs right)
-                // Assuming values are raw integers for now.
-                // For Vanarize values, need to unbox first.
-                // For simplicity, assuming numbers are already in RAX/RCX.
-                Asm_Cmp_Reg_Reg(as, RAX, RCX);
-                
-                // Zero RAX first
+                // Move values to XMM registers for floating-point comparison
+                // RAX has right value, move to XMM1
+                // MOVQ XMM1, RAX: 66 48 0F 6E C8
+                Asm_Emit8(as, 0x66); // Operand-size prefix
                 Asm_Emit8(as, 0x48); // REX.W
-                Asm_Emit8(as, 0x31); // XOR
-                Asm_Emit8(as, 0xC0); // RAX, RAX
+                Asm_Emit8(as, 0x0F);
+                Asm_Emit8(as, 0x6E);
+                Asm_Emit8(as, 0xC8); // ModRM: XMM1, RAX
                 
-                // SETcc AL based on condition
+                Asm_Pop(as, RAX); // Get left value
+                // MOVQ XMM0, RAX: 66 48 0F 6E C0
+                Asm_Emit8(as, 0x66);
+                Asm_Emit8(as, 0x48);
+                Asm_Emit8(as, 0x0F);
+                Asm_Emit8(as, 0x6E);
+                Asm_Emit8(as, 0xC0); // ModRM: XMM0, RAX
+                
+                // UCOMISD XMM0, XMM1 (compare XMM0 to XMM1)
+                // Opcode: 66 0F 2E /r
+                Asm_Emit8(as, 0x66);
+                Asm_Emit8(as, 0x0F);
+                Asm_Emit8(as, 0x2E);
+                Asm_Emit8(as, 0xC1); // ModRM: XMM0, XMM1
+                
+                // Zero RAX
+                Asm_Emit8(as, 0x48);
+                Asm_Emit8(as, 0x31);
+                Asm_Emit8(as, 0xC0);
+                
+                // SETcc AL based on flags from UCOMISD
                 if (bin->op.type == TOKEN_LESS) {
-                    // SETL AL (set if less - signed)
+                    // SETB AL (set if below/less for unsigned)
                     Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x9C); // SETL
-                    Asm_Emit8(as, 0xC0); // AL
+                    Asm_Emit8(as, 0x92);
+                    Asm_Emit8(as, 0xC0);
                 } else if (bin->op.type == TOKEN_GREATER) {
-                    // SETG AL
+                    // SETA AL (set if above)
                     Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x9F);
+                    Asm_Emit8(as, 0x97);
                     Asm_Emit8(as, 0xC0);
                 } else if (bin->op.type == TOKEN_LESS_EQUAL) {
-                    // SETLE AL
+                    // SETBE AL
                     Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x9E);
+                    Asm_Emit8(as, 0x96);
                     Asm_Emit8(as, 0xC0);
                 } else if (bin->op.type == TOKEN_GREATER_EQUAL) {
-                    // SETGE AL
+                    // SETAE AL
                     Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x9D);
+                    Asm_Emit8(as, 0x93);
                     Asm_Emit8(as, 0xC0);
                 } else if (bin->op.type == TOKEN_EQUAL_EQUAL) {
-                    // SETE AL
+                    // SETE AL (set if equal)
                     Asm_Emit8(as, 0x0F);
                     Asm_Emit8(as, 0x94);
                     Asm_Emit8(as, 0xC0);
@@ -569,7 +585,6 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     Asm_Emit8(as, 0xC0);
                 }
                 
-                // Now AL contains 0 or 1, RAX is the full result
                 break;
             }
             
