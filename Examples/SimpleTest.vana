@@ -1,4 +1,5 @@
 // Simple number test
+// Master Plan Compliance: Typed Variables
 function Main() {
     number x = 42;
     print(x);
