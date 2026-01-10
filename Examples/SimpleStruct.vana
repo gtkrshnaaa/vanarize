@@ -1,0 +1,14 @@
+// VANARIZE TEST: Basic Struct Operations
+// Minimal test for struct definition, instantiation, and field access
+
+struct Point {
+    number x
+    number y
+}
+
+function Main() {
+    Point p = { x: 10, y: 20 };
+    
+    number sum = p.x + p.y;
+    print(sum);
+}

@@ -1,0 +1,49 @@
+// VANARIZE REFERENCE IMPLEMENTATION
+// Test Case: Struct Definition and Function Calls
+// Following VANARIZEMASTERPLAN.md Appendix A Style
+
+// Struct Definition (PascalCase)
+struct SensorData {
+    text deviceId
+    number temperature
+    boolean isActive
+}
+
+// Helper Function (PascalCase, Typed Parameters, Return Type)
+function CalibrateSensor(number rawValue) :: number {
+    number calibrated = rawValue * 0.98;
+    return calibrated;
+}
+
+// Struct Processing Function
+function ProcessSensor(SensorData sensor) :: boolean {
+    if (sensor.isActive) {
+        print(sensor.temperature);
+        return true;
+    }
+    return false;
+}
+
+// Application Entry Point (Following Master Plan Convention)
+function Main() {
+    number maxRetries = 3;
+    
+    // Struct Instantiation with Field Initialization
+    SensorData mainSensor = { deviceId: "Therm-X100", temperature: 42.5, isActive: true };
+    
+    // Control Flow: If Statement
+    if (mainSensor.isActive) {
+        // Data Processing
+        mainSensor.temperature = CalibrateSensor(mainSensor.temperature);
+        
+        // Function Call with Struct Parameter
+        boolean success = ProcessSensor(mainSensor);
+        
+        // Loop Structure (C-Style, as per Master Plan Section 4.2.C)
+        number i = 1;
+        while (i <= maxRetries) {
+            print(i);
+            i = i + 1;
+        }
+    }
+}

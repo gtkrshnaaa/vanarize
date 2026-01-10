@@ -1,0 +1,15 @@
+// VANARIZE TEST: Control Flow (If-Else, While Loop)
+
+function Main() {
+    number counter = 0;
+    number max = 5;
+    
+    while (counter < max) {
+        if (counter == 3) {
+            print(999);
+        } else {
+            print(counter);
+        }
+        counter = counter + 1;
+    }
+}

@@ -1,0 +1,20 @@
+// VANARIZE TEST: Function Calls and Return Values
+
+function Add(number a, number b) :: number {
+    return a + b;
+}
+
+function Multiply(number a, number b) :: number {
+    return a * b;
+}
+
+function Main() {
+    number x = 5;
+    number y = 10;
+    
+    number sum = Add(x, y);
+    number product = Multiply(x, y);
+    
+    print(sum);
+    print(product);
+}

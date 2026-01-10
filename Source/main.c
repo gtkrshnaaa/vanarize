@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include "Compiler/Parser.h"
 #include "Jit/CodeGen.h"
+#include "Core/Memory.h"
+#include "Core/GarbageCollector.h"
 
 char* readFile(const char* path) {
     FILE* file = fopen(path, "rb");
@@ -31,11 +33,15 @@ int main(int argc, char* argv[]) {
     char* source = readFile(argv[1]);
     
     Parser_Init(source);
-    AstNode* root = Parser_ParseExpression();
+    AstNode* root = Parser_ParseProgram();  // Parse entire program
     if (!root) {
         fprintf(stderr, "Parse error.\n");
         exit(65);
     }
+    
+    // Initialize GC and Memory
+    VM_InitMemory();
+    GC_Init();
     
     JitFunction func = Jit_Compile(root);
     func();

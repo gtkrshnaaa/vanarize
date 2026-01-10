@@ -512,3 +512,8 @@ AstNode* Parser_ParseExpression(void) {
     
     return (AstNode*)block;
 }
+
+// Alias for ParseExpression (both do program-level parsing)
+AstNode* Parser_ParseProgram(void) {
+    return Parser_ParseExpression();
+}
