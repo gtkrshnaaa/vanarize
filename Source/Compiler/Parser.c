@@ -2,6 +2,7 @@
 #include "Compiler/Lexer.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 static Token currentToken;
 static Token previousToken;
@@ -60,8 +61,50 @@ static AstNode* term() {
     return expr;
 }
 
-static AstNode* factor() {
+static AstNode* call() {
     AstNode* expr = primary();
+    
+    while (true) {
+        if (currentToken.type == TOKEN_LEFT_PAREN) {
+            advance();
+            CallExpr* node = malloc(sizeof(CallExpr));
+            node->main.type = NODE_CALL_EXPR;
+            // node->callee = ... wait, expr must be identifier for now
+            // Simplified: We assume current expr is an identifier.
+            // But `expr` is an AstNode. We can't easily extract the token from generic node without casting.
+            // Let's assume for this stage: calls only on identifiers.
+            // Check if expr is a variable usage (which we haven't implemented yet, but primary parses identifiers?)
+            // Actually primary() didn't parse identifiers in previous step.
+            
+            // We need to store arguments.
+            node->args = malloc(sizeof(AstNode*) * 8); // Max 8 args for now
+            node->argCount = 0;
+            
+            if (currentToken.type != TOKEN_RIGHT_PAREN) {
+                do {
+                    node->args[node->argCount++] = expression();
+                } while (currentToken.type == TOKEN_COMMA && (advance(), 1)); // Cute comma skip
+            }
+            
+            consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
+            
+            // Hack for callee name since we don't have Var access yet
+            // If expr was NODE_LITERAL_EXPR (but type identifier?), wait primary handles literal.
+            // We need primary to handle identifiers.
+            node->callee = ((LiteralExpr*)expr)->token; // Unsafe cast, need primary update
+            
+            expr = (AstNode*)node;
+        } else {
+            break;
+        }
+    }
+    
+    return expr;
+}
+
+static AstNode* factor() {
+    AstNode* expr = call();
+    // ... rest same
     
     while (currentToken.type == TOKEN_SLASH || currentToken.type == TOKEN_STAR) {
         Token op = currentToken;
@@ -88,8 +131,42 @@ static AstNode* primary() {
         return (AstNode*)node;
     }
     
+    if (currentToken.type == TOKEN_STRING) {
+        StringExpr* node = malloc(sizeof(StringExpr));
+        node->main.type = NODE_STRING_LITERAL;
+        node->token = currentToken;
+        advance();
+        return (AstNode*)node;
+    }
+
+    if (currentToken.type == TOKEN_IDENTIFIER) {
+        // Treat as literal/variable access
+        LiteralExpr* node = malloc(sizeof(LiteralExpr));
+        node->main.type = NODE_LITERAL_EXPR; // Reusing Literal for Var for now
+        node->token = currentToken;
+        advance();
+        return (AstNode*)node;
+    }
+
+    if (currentToken.type == TOKEN_PRINT) {
+        // Treat 'print' as an identifier-like literal so it can be called
+        LiteralExpr* node = malloc(sizeof(LiteralExpr));
+        node->main.type = NODE_LITERAL_EXPR;
+        node->token = currentToken;
+        advance();
+        return (AstNode*)node;
+    }
+    
+    if (currentToken.type == TOKEN_TRUE || currentToken.type == TOKEN_FALSE || currentToken.type == TOKEN_NIL) {
+        LiteralExpr* node = malloc(sizeof(LiteralExpr));
+        node->main.type = NODE_LITERAL_EXPR;
+        node->token = currentToken;
+        advance();
+        return (AstNode*)node;
+    }
+    
     // Grouping, etc. omitted for briefness
-    fprintf(stderr, "[Parser] Expect expression.\n");
+    fprintf(stderr, "[Parser] Expect expression. Got token type %d\n", currentToken.type);
     exit(1);
     return NULL;
 }

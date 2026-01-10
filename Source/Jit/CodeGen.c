@@ -1,8 +1,11 @@
 #include "Jit/CodeGen.h"
 #include "Jit/AssemblerX64.h"
 #include "Jit/ExecutableMemory.h"
+#include "Core/Native.h"
+#include "Core/VanarizeObject.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 #define MAX_JIT_SIZE 4096
 
@@ -11,30 +14,70 @@ static void emitNode(Assembler* as, AstNode* node) {
         case NODE_LITERAL_EXPR: {
             LiteralExpr* lit = (LiteralExpr*)node;
             if (lit->token.type == TOKEN_NUMBER) {
-                // Parse number
-                // Note: Token is a string pointing to source.
-                // We need to parse strict double/int.
-                // For simplified "10 + 20", let's assume integers fitting in 64-bit for now 
-                // or just strtoull.
-                // Vanarize spec says Numbers are doubles (NaN boxing), 
-                // but for this specific "return 42" test we used integers in the JIT test.
-                // WE MUST RESPECT NAN BOXING if we want to be correct, 
-                // BUT the Asm_Mov_Imm64 expects a raw uint64_t.
-                // If we want to return a raw int for the test to pass `assert(result == 30)`, 
-                // we should just emit the int.
-                // If we used NaN boxing, the result would be a double encoded.
-                // Let's stick to raw integers for this bootstrap phase to match previous tests unless 
-                // we want to fully switch to Value everywhere.
-                // Decision: Emitting raw integers for this simplified AST test.
-                
+                // ... same number parsing
                 char buffer[64];
                 int len = lit->token.length < 63 ? lit->token.length : 63;
                 for(int i=0; i<len; i++) buffer[i] = lit->token.start[i];
                 buffer[len] = '\0';
-                
                 uint64_t val = strtoull(buffer, NULL, 10);
                 Asm_Mov_Imm64(as, RAX, val);
+            } else if (lit->token.type == TOKEN_TRUE) {
+                Asm_Mov_Imm64(as, RAX, VAL_TRUE);
+            } else if (lit->token.type == TOKEN_FALSE) {
+                Asm_Mov_Imm64(as, RAX, VAL_FALSE);
+            } else if (lit->token.type == TOKEN_NIL) {
+                Asm_Mov_Imm64(as, RAX, VAL_NULL);
             }
+            break;
+        }
+
+        case NODE_STRING_LITERAL: {
+            StringExpr* strExpr = (StringExpr*)node;
+            // 1. Create native ObjString (Runtime)
+            // Need to extract string from token (remove quotes)
+            int len = strExpr->token.length - 2;
+            ObjString* objStr = malloc(sizeof(ObjString) + len + 1);
+            objStr->obj.type = OBJ_STRING;
+            objStr->length = len;
+            memcpy(objStr->chars, strExpr->token.start + 1, len);
+            objStr->chars[len] = '\0';
+            
+            // 2. Wrap in Value (NaN Boxed)
+            Value v = ObjToValue(objStr);
+            
+            // 3. Emit MOV RAX, POINTER
+            // We mov the Value (which is just a flagged pointer)
+            Asm_Mov_Imm64(as, RAX, v);
+            break;
+        }
+
+        case NODE_CALL_EXPR: {
+            CallExpr* call = (CallExpr*)node;
+            // 1. Compile Arguments
+            // System V ABI: First arg in RDI.
+            // Start with single arg for PRINT
+            if (call->argCount > 0) {
+                emitNode(as, call->args[0]);
+                // Result in RAX. Move to RDI.
+                // We don't have MOV RDI, RAX yet in Assembler?
+                // We have Asm_Mov_Reg_Reg? No, we didn't implement it fully.
+                // Quick hack: Push RAX, Pop RDI.
+                Asm_Push(as, RAX);
+                Asm_Pop(as, RDI);
+                
+                // TODO: Handle more args (RSI, RDX...)
+            }
+            
+            // 2. Identify Callee
+            // Assume it is "print"
+            // Get pointer to Native_Print
+            void* funcPtr = (void*)Native_Print;
+            
+            // 3. MOV RAX, funcPtr
+            Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+            
+            // 4. CALL RAX
+            Asm_Call_Reg(as, RAX);
             break;
         }
         

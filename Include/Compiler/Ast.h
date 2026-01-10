@@ -7,6 +7,8 @@
 typedef enum {
     NODE_BINARY_EXPR,
     NODE_LITERAL_EXPR,
+    NODE_STRING_LITERAL,
+    NODE_CALL_EXPR,
     NODE_VAR_DECL,
     NODE_FUNCTION_DECL,
     NODE_BLOCK,
@@ -31,6 +33,21 @@ typedef struct {
     AstNode main;
     Token token; // For Number or String
 } LiteralExpr;
+
+typedef struct {
+    AstNode main;
+    Token token;
+    // We will evaluate the string value at parse time or compile time?
+    // Lexer gives a pointer to source.
+    // For now, AST holds the Token. Compiler will convert to ObjString.
+} StringExpr;
+
+typedef struct {
+    AstNode main;
+    Token callee; // Identifier
+    AstNode** args;
+    int argCount;
+} CallExpr;
 
 // Statements
 typedef struct {

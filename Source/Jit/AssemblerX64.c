@@ -83,6 +83,22 @@ void Asm_Pop(Assembler* as, Register dst) {
     Asm_Emit8(as, 0x58 + dst);
 }
 
+// CALL r64
+// Opcode: FF /2 (ModR/M with reg field=2)
+// ModR/M for register: 11 010 reg -> 0xD0 + reg
+void Asm_Call_Reg(Assembler* as, Register src) {
+    if (src > RDI) {
+        fprintf(stderr, "Extended registers not yet supported in Call\n");
+        exit(1);
+    }
+    Asm_Emit8(as, 0xFF);
+    Asm_Emit8(as, 0xD0 + src);
+}
+
+void Asm_Mov_Reg_Ptr(Assembler* as, Register dst, void* ptr) {
+    Asm_Mov_Imm64(as, dst, (uint64_t)(uintptr_t)ptr);
+}
+
 // RET
 // Opcode: C3
 void Asm_Ret(Assembler* as) {
