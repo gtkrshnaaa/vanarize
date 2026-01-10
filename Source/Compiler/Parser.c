@@ -38,9 +38,45 @@ static AstNode* term();
 static AstNode* factor();
 static AstNode* primary();
 
+
+
+// Correct implementation of assignment:
+static AstNode* assignment();
+
 static AstNode* expression() {
-    return term();
+    return assignment();
 }
+
+static AstNode* assignment() {
+    AstNode* expr = term();
+    
+    if (currentToken.type == TOKEN_EQUAL) {
+        advance();
+        AstNode* value = assignment();
+        
+        if (expr->type == NODE_LITERAL_EXPR) {
+            LiteralExpr* lit = (LiteralExpr*)expr;
+            if (lit->token.type == TOKEN_IDENTIFIER) {
+                AssignmentExpr* node = malloc(sizeof(AssignmentExpr));
+                node->main.type = NODE_ASSIGNMENT_EXPR;
+                node->name = lit->token;
+                node->value = value;
+                return (AstNode*)node;
+            }
+        }
+        
+        fprintf(stderr, "[Parser] Invalid assignment target.\n");
+        exit(1);
+    }
+    
+    return expr;
+}
+
+// term() parses binary + -
+// factor() parses * /
+// call() parses calls
+// primary() parses literals and identifiers.
+
 
 static AstNode* term() {
     AstNode* expr = factor();
@@ -171,6 +207,8 @@ static AstNode* primary() {
     return NULL;
 }
 
+static AstNode* statement();
+
 static AstNode* declaration() {
     if (currentToken.type == TOKEN_VAR) {
         advance();
@@ -192,7 +230,60 @@ static AstNode* declaration() {
         return (AstNode*)node;
     }
     
-    // Fallback to statement -> expression statement
+    return statement();
+}
+
+static AstNode* statement() {
+    if (currentToken.type == TOKEN_IF) {
+        advance();
+        consume(TOKEN_LEFT_PAREN, "Expect '(' after 'if'.");
+        AstNode* condition = expression();
+        consume(TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
+        
+        AstNode* thenBranch = statement();
+        AstNode* elseBranch = NULL;
+        
+        if (currentToken.type == TOKEN_ELSE) {
+            advance();
+            elseBranch = statement();
+        }
+        
+        IfStmt* node = malloc(sizeof(IfStmt));
+        node->main.type = NODE_IF_STMT;
+        node->condition = condition;
+        node->thenBranch = thenBranch;
+        node->elseBranch = elseBranch;
+        return (AstNode*)node;
+    }
+    
+    if (currentToken.type == TOKEN_WHILE) {
+        advance();
+        consume(TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
+        AstNode* condition = expression();
+        consume(TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
+        AstNode* body = statement();
+        
+        WhileStmt* node = malloc(sizeof(WhileStmt));
+        node->main.type = NODE_WHILE_STMT;
+        node->condition = condition;
+        node->body = body;
+        return (AstNode*)node;
+    }
+    
+    if (currentToken.type == TOKEN_LEFT_BRACE) {
+        advance();
+        BlockStmt* node = malloc(sizeof(BlockStmt));
+        node->main.type = NODE_BLOCK;
+        node->statements = malloc(sizeof(AstNode*) * 64);
+        node->count = 0;
+        
+        while (currentToken.type != TOKEN_RIGHT_BRACE && currentToken.type != TOKEN_EOF) {
+            node->statements[node->count++] = declaration();
+        }
+        consume(TOKEN_RIGHT_BRACE, "Expect '}' after block.");
+        return (AstNode*)node;
+    }
+    
     AstNode* expr = expression();
     consume(TOKEN_SEMICOLON, "Expect ';' after expression.");
     return expr;

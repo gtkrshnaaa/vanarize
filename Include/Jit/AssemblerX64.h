@@ -56,6 +56,22 @@ void Asm_Mov_Reg_Mem(Assembler* as, Register dst, Register base, int32_t offset)
 // MOV [base + offset], src
 void Asm_Mov_Mem_Reg(Assembler* as, Register base, int32_t offset, Register src);
 
+// CMP reg, imm64 (Only supports 32-bit immediate for now for simplicity or full?)
+// CMP r64, r64 is also useful.
+// Let's do CMP r64, imm32 (sign extended) is standard '48 81 /7 id'
+void Asm_Cmp_Reg_Imm(Assembler* as, Register dst, int32_t imm);
+
+// CMP r64, r64
+void Asm_Cmp_Reg_Reg(Assembler* as, Register dst, Register src);
+
+// Jcc rel32
+void Asm_Je(Assembler* as, int32_t offset);
+void Asm_Jne(Assembler* as, int32_t offset);
+void Asm_Jmp(Assembler* as, int32_t offset);
+
+// Patching
+void Asm_Patch32(Assembler* as, size_t offset, int32_t value);
+
 // RET
 void Asm_Ret(Assembler* as);
 

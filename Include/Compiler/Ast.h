@@ -10,9 +10,12 @@ typedef enum {
     NODE_STRING_LITERAL,
     NODE_CALL_EXPR,
     NODE_VAR_DECL,
+    NODE_ASSIGNMENT_EXPR,
     NODE_FUNCTION_DECL,
     NODE_BLOCK,
-    NODE_RETURN_STMT
+    NODE_RETURN_STMT,
+    NODE_IF_STMT,
+    NODE_WHILE_STMT
 } NodeType;
 
 typedef struct AstNode AstNode;
@@ -50,6 +53,12 @@ typedef struct {
 
 typedef struct {
     AstNode main;
+    Token name;
+    AstNode* value;
+} AssignmentExpr;
+
+typedef struct {
+    AstNode main;
     Token callee; // Identifier
     AstNode** args;
     int argCount;
@@ -63,6 +72,19 @@ typedef struct {
 } BlockStmt;
 
 
+
+typedef struct {
+    AstNode main;
+    AstNode* condition;
+    AstNode* thenBranch;
+    AstNode* elseBranch;
+} IfStmt;
+
+typedef struct {
+    AstNode main;
+    AstNode* condition;
+    AstNode* body;
+} WhileStmt;
 
 typedef struct {
     AstNode main;

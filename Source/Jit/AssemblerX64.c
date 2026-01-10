@@ -133,6 +133,63 @@ void Asm_Mov_Mem_Reg(Assembler* as, Register base, int32_t offset, Register src)
     emitModRM_Disp32(as, src, base, offset);
 }
 
+// CMP r64, imm32
+// Opcode: 48 81 /7 id
+void Asm_Cmp_Reg_Imm(Assembler* as, Register dst, int32_t imm) {
+    Asm_Emit8(as, 0x48);
+    Asm_Emit8(as, 0x81);
+    Asm_Emit8(as, 0xF8 + dst); // ModRM(11, 111, reg) -> F8+reg? No.
+    // /7 means REG field is 111.
+    // Mod=11 (Register mode) | REG=111 | R/M=dst
+    // 11 111 dst -> 0xF8 + dst
+    // Wait, ModRM is Mod(2) Reg(3) RM(3).
+    // 11 111 dst(=0) -> 11111000 = F8. Correct.
+    for (int i=0; i<4; i++) {
+        Asm_Emit8(as, (uint8_t)(imm & 0xFF));
+        imm >>= 8;
+    }
+}
+
+// JMP rel32
+// Opcode: E9 cd
+void Asm_Jmp(Assembler* as, int32_t offset) {
+    Asm_Emit8(as, 0xE9);
+    for (int i=0; i<4; i++) {
+        Asm_Emit8(as, (uint8_t)(offset & 0xFF));
+        offset >>= 8;
+    }
+}
+
+// JE rel32
+// Opcode: 0F 84 cd
+void Asm_Je(Assembler* as, int32_t offset) {
+    Asm_Emit8(as, 0x0F);
+    Asm_Emit8(as, 0x84);
+    for (int i=0; i<4; i++) {
+        Asm_Emit8(as, (uint8_t)(offset & 0xFF));
+        offset >>= 8;
+    }
+}
+
+// JNE rel32
+// Opcode: 0F 85 cd
+void Asm_Jne(Assembler* as, int32_t offset) {
+    Asm_Emit8(as, 0x0F);
+    Asm_Emit8(as, 0x85);
+    for (int i=0; i<4; i++) {
+        Asm_Emit8(as, (uint8_t)(offset & 0xFF));
+        offset >>= 8;
+    }
+}
+
+void Asm_Patch32(Assembler* as, size_t offset, int32_t value) {
+    if (offset + 4 > as->capacity) return; // Error
+    as->buffer[offset] = (uint8_t)(value & 0xFF);
+    as->buffer[offset+1] = (uint8_t)((value >> 8) & 0xFF);
+    as->buffer[offset+2] = (uint8_t)((value >> 16) & 0xFF);
+    as->buffer[offset+3] = (uint8_t)((value >> 24) & 0xFF);
+}
+
 // RET
 // Opcode: C3
 void Asm_Ret(Assembler* as) {

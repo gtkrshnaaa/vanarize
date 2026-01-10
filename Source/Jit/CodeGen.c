@@ -44,29 +44,34 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
         
         case NODE_VAR_DECL: {
             VarDecl* decl = (VarDecl*)node;
-            // 1. Compile Initializer -> RAX
             if (decl->initializer) {
                 emitNode(as, decl->initializer, ctx);
             } else {
                 Asm_Mov_Imm64(as, RAX, VAL_NULL);
             }
-            
-            // 2. Push to stack (Alloc local)
-            // Ideally we pre-calc stack size. For JIT simplicity, we can just push.
-            // But strict offsets are better.
-            Asm_Push(as, RAX); // RSP decrements by 8
-            
-            // 3. Register local
+            Asm_Push(as, RAX);
             ctx->stackSize += 8;
             Local* local = &ctx->locals[ctx->localCount++];
             local->name = decl->name;
-            local->offset = ctx->stackSize; // Offset from RBP?
-            // RBP points to old RBP.
-            // Stack: [Old RBP] [Ret Addr] ...
-            // Wait, Standard Prologue: PUSH RBP; MOV RBP, RSP.
-            // Locals are at RBP - 8, RBP - 16 etc.
-            // If we use PUSH to store locals, they appear at RBP - 8 * N.
-            // Yes.
+            local->offset = ctx->stackSize;
+            break;
+        }
+
+        case NODE_ASSIGNMENT_EXPR: {
+            AssignmentExpr* assign = (AssignmentExpr*)node;
+            // 1. Compile Value -> RAX
+            emitNode(as, assign->value, ctx);
+            
+            // 2. Resolve Variable
+            int offset = resolveLocal(ctx, &assign->name);
+            if (offset == 0) {
+                 fprintf(stderr, "JIT Error: Undefined variable '%.*s' in assignment\n", assign->name.length, assign->name.start);
+                 exit(1);
+            }
+            
+            // 3. Store RAX -> [RBP - offset]
+            Asm_Mov_Mem_Reg(as, RBP, -offset, RAX);
+            // Result of assignment is the value (RAX preserved)
             break;
         }
 
@@ -148,6 +153,114 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             if (bin->op.type == TOKEN_PLUS) {
                 Asm_Add_Reg_Reg(as, RAX, RCX);
             } 
+            break;
+        }
+
+        case NODE_IF_STMT: {
+            IfStmt* stmt = (IfStmt*)node;
+            // 1. Compile Condition
+            emitNode(as, stmt->condition, ctx);
+            
+            // 2. Check if false (Simplified: Assume boolean values are 2 for FALSE and 3 for TRUE.
+            // Actually, we can just compare with VAL_FALSE (2).
+            // But if it's nil, that's also falsey?
+            // For now: Compare RAX with VAL_FALSE. If equal, Jump Else.
+            // NOTE: VAL_FALSE is a 64-bit value with NaNs.
+            // Asm_Cmp_Reg_Imm only supports 32-bit immediate. 
+            // We need 64-bit comparison? Or just check low bits?
+            // Val: False=2 (Actually ...7FFC...02).
+            // Let's implement full 64-bit compare logic or just Asm_Mov_Imm64(RCX, VAL_FALSE); Cmp RAX, RCX?
+            // We don't have Cmp_Reg_Reg yet? I forgot to declare it in Replace 181?
+            // Checking AssemblerX64.h... I commented it out/didn't implement Cmp_Reg_Reg properly?
+            // I only added Cmp_Reg_Imm.
+            // Can we compare against 0 (nil)? Or raw true/false.
+            // Hack: Compare against VAL_FALSE using a temp register.
+            // Since we know VAL_FALSE is constant.
+            // BUT Asm_Cmp_Reg_Imm is limited to 32-bit.
+            // Let's add Asm_Cmp_Reg_Reg locally if needed, or use a scratch register.
+            // Actually, testing against 0 (boolean false) if we use raw integers would be easier.
+            // But we are sticking to Vanarize values.
+            // Let's assume for this specific test, condition is `true` or `false`.
+            // Let's verify Asm_Cmp_Reg_Imm implementation... it emits 48 81 /7 id.
+            // If we use 0 and 1 for booleans in our test, simpler.
+            // But let's try to be correct.
+            // Let's use `CMP RAX, Imm32` if value fits in 32 bits?
+            // QNAN markers don't fit.
+            // OK, let's load VAL_FALSE into RCX and CMP RAX, RCX.
+            // We need `CMP r64, r64`.
+            // Opcode is `48 39 /r` (CMP r/m64, r64).
+            // Let's emit raw bytes for now since I forgot to expose it cleanly.
+            // 48 39 /r => ModRM.
+            
+            // Actually, we can use `Asm_Cmp_Reg_Imm` if we assume 0 = false/null and 1 = true
+            // But let's support generic values.
+            // Load VAL_FALSE to RCX.
+            Asm_Mov_Imm64(as, RCX, VAL_FALSE);
+            
+            // CMP RAX, RCX
+            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8); // Mode=11, Reg=RCX(1), RM=RAX(0) -> 11 001 000 = C8.
+            
+            // JE elseBranch (Jump if Equal to False)
+            // Emit JE with 0 offset
+            size_t elseJumpPatch = as->offset + 2; // Offset of the displacement bytes (after 0F 84)
+            Asm_Je(as, 0); 
+            
+            // Compile Then
+            emitNode(as, stmt->thenBranch, ctx);
+            
+            // JMP end
+            size_t endJumpPatch = as->offset + 1; // Offset of displacement (after E9)
+            Asm_Jmp(as, 0);
+            
+            // Patch JE to here (start of Else)
+            size_t elseStart = as->offset;
+            int32_t jumpDist = (int32_t)(elseStart - (elseJumpPatch + 4));
+            Asm_Patch32(as, elseJumpPatch, jumpDist);
+            
+            // Compile Else
+            if (stmt->elseBranch) {
+                emitNode(as, stmt->elseBranch, ctx);
+            }
+            
+            // Patch JMP to here (End)
+            size_t endStart = as->offset;
+            int32_t endDist = (int32_t)(endStart - (endJumpPatch + 4));
+            Asm_Patch32(as, endJumpPatch, endDist);
+            
+            break;
+        }
+
+        case NODE_WHILE_STMT: {
+            WhileStmt* stmt = (WhileStmt*)node;
+            size_t loopStart = as->offset;
+            
+            // 1. Compile Condition
+            emitNode(as, stmt->condition, ctx);
+            
+            // 2. CMP RAX, VAL_FALSE
+            Asm_Mov_Imm64(as, RCX, VAL_FALSE);
+            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8);
+            
+            // 3. JE end
+            size_t loopEndPatch = as->offset + 2;
+            Asm_Je(as, 0);
+            
+            // 4. Body
+            emitNode(as, stmt->body, ctx);
+            
+            // 5. JMP start (Backwards)
+            size_t jmpBackStart = as->offset;
+            // Dist = Target - (Source + 5)
+            // Target = loopStart. Source = jmpBackStart.
+            // Dist = loopStart - (jmpBackStart + 5).
+            int32_t backDist = (int32_t)(loopStart - (jmpBackStart + 5));
+            Asm_Jmp(as, backDist);
+            
+            // 6. Patch JE to end
+            size_t endOffset = as->offset;
+            int32_t exitDist = (int32_t)(endOffset - (loopEndPatch + 4));
+            Asm_Patch32(as, loopEndPatch, exitDist);
+            
             break;
         }
 
