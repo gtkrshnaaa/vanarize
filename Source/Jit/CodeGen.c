@@ -787,47 +787,14 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // 1. Compile Condition
             emitNode(as, stmt->condition, ctx);
             
-            // 2. Check if false (Simplified: Assume boolean values are 2 for FALSE and 3 for TRUE.
-            // Actually, we can just compare with VAL_FALSE (2).
-            // But if it's nil, that's also falsey?
-            // For now: Compare RAX with VAL_FALSE. If equal, Jump Else.
-            // NOTE: VAL_FALSE is a 64-bit value with NaNs.
-            // Asm_Cmp_Reg_Imm only supports 32-bit immediate. 
-            // We need 64-bit comparison? Or just check low bits?
-            // Val: False=2 (Actually ...7FFC...02).
-            // Let's implement full 64-bit compare logic or just Asm_Mov_Imm64(RCX, VAL_FALSE); Cmp RAX, RCX?
-            // We don't have Cmp_Reg_Reg yet? I forgot to declare it in Replace 181?
-            // Checking AssemblerX64.h... I commented it out/didn't implement Cmp_Reg_Reg properly?
-            // I only added Cmp_Reg_Imm.
-            // Can we compare against 0 (nil)? Or raw true/false.
-            // Hack: Compare against VAL_FALSE using a temp register.
-            // Since we know VAL_FALSE is constant.
-            // BUT Asm_Cmp_Reg_Imm is limited to 32-bit.
-            // Let's add Asm_Cmp_Reg_Reg locally if needed, or use a scratch register.
-            // Actually, testing against 0 (boolean false) if we use raw integers would be easier.
-            // But we are sticking to Vanarize values.
-            // Let's assume for this specific test, condition is `true` or `false`.
-            // Let's verify Asm_Cmp_Reg_Imm implementation... it emits 48 81 /7 id.
-            // If we use 0 and 1 for booleans in our test, simpler.
-            // But let's try to be correct.
-            // Let's use `CMP RAX, Imm32` if value fits in 32 bits?
-            // QNAN markers don't fit.
-            // OK, let's load VAL_FALSE into RCX and CMP RAX, RCX.
-            // We need `CMP r64, r64`.
-            // Opcode is `48 39 /r` (CMP r/m64, r64).
-            // Let's emit raw bytes for now since I forgot to expose it cleanly.
-            // 48 39 /r => ModRM.
-            
-            // Actually, we can use `Asm_Cmp_Reg_Imm` if we assume 0 = false/null and 1 = true
-            // But let's support generic values.
+            // 2. Check if false (Compare RAX with VAL_FALSE)
             // Load VAL_FALSE to RCX.
             Asm_Mov_Imm64(as, RCX, VAL_FALSE);
             
             // CMP RAX, RCX
-            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8); // Mode=11, Reg=RCX(1), RM=RAX(0) -> 11 001 000 = C8.
+            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8); // CMP RAX, RCX
             
             // JE elseBranch (Jump if Equal to False)
-            // Emit JE with 0 offset
             size_t elseJumpPatch = as->offset + 2; // Offset of the displacement bytes (after 0F 84)
             Asm_Je(as, 0); 
             
@@ -865,18 +832,18 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // Evaluate condition -> RAX (0 or 1)
             emitNode(as, whileStmt->condition, ctx);
             
-            // Test if RAX is 0 (false)
-            // TEST RAX, RAX
-            Asm_Emit8(as, 0x48); // REX.W
-            Asm_Emit8(as, 0x85); // TEST
-            Asm_Emit8(as, 0xC0); // RAX, RAX
+            // Check if FALSE
+            Asm_Mov_Imm64(as, RCX, VAL_FALSE); // RCX = VAL_FALSE
             
-            // JE (jump if zero) to loop end - placeholder
+            // CMP RAX, RCX
+            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8);
+            
+            // JE (jump if Equal to False) to loop end
             Asm_Emit8(as, 0x0F); // JE rel32
             Asm_Emit8(as, 0x84);
             size_t loopEndPatch = as->offset;
             Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
-            Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); // placeholder
+            Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
             
             // Loop body
             emitNode(as, whileStmt->body, ctx);
