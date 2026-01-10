@@ -1,0 +1,17 @@
+// Direct inline benchmark - no function calls
+function Main() {
+    number i = 0;
+    number sum = 0;
+    
+    StdTime.Measure();
+    
+    while (i < 1000000) {
+        sum = sum + i;
+        i = i + 1;
+    }
+    
+    number elapsed = StdTime.Measure();
+    number ops = 1000000 * 1000000000 / elapsed;
+    
+    print(ops);
+}
