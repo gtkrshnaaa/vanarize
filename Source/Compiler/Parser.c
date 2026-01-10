@@ -6,18 +6,22 @@
 
 static Token currentToken;
 static Token previousToken;
+static Token nextToken; // Lookahead
 
-static void advance() {
-    previousToken = currentToken;
+static void scanNext() {
     for (;;) {
-        currentToken = Lexer_NextToken();
-        if (currentToken.type != TOKEN_ERROR) break;
-        // errorAtCurrent(currentToken.start);
-        fprintf(stderr, "Lexer error: %.*s\n", currentToken.length, currentToken.start);
+        nextToken = Lexer_NextToken();
+        if (nextToken.type != TOKEN_ERROR) break;
+        fprintf(stderr, "Lexer error: %.*s\n", nextToken.length, nextToken.start);
         exit(1);
     }
 }
 
+static void advance() {
+    previousToken = currentToken;
+    currentToken = nextToken;
+    scanNext();
+}
 static void consume(TokenType type, const char* message) {
     if (currentToken.type == type) {
         advance();
@@ -29,7 +33,8 @@ static void consume(TokenType type, const char* message) {
 
 void Parser_Init(const char* source) {
     Lexer_Init(source);
-    advance(); // Prime the pump
+    scanNext(); // Fill nextToken with 1st token
+    advance();  // Fill currentToken with 1st token, nextToken with 2nd
 }
 
 // Forward decls
@@ -130,6 +135,16 @@ static AstNode* call() {
             node->callee = ((LiteralExpr*)expr)->token; // Unsafe cast, need primary update
             
             expr = (AstNode*)node;
+        } else if (currentToken.type == TOKEN_DOT) {
+            advance();
+            consume(TOKEN_IDENTIFIER, "Expect property name after '.'.");
+            Token name = previousToken;
+            
+            GetExpr* node = malloc(sizeof(GetExpr));
+            node->main.type = NODE_GET_EXPR;
+            node->object = expr;
+            node->name = name;
+            expr = (AstNode*)node;
         } else {
             break;
         }
@@ -209,31 +224,189 @@ static AstNode* primary() {
 
 static AstNode* statement();
 
-static AstNode* declaration() {
-    if (currentToken.type == TOKEN_VAR) {
-        advance();
-        consume(TOKEN_IDENTIFIER, "Expect variable name.");
-        Token name = previousToken;
-        
-        AstNode* initializer = NULL;
-        if (currentToken.type == TOKEN_EQUAL) {
-            advance();
-            initializer = expression();
-        }
-        
-        consume(TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
-        
-        VarDecl* node = malloc(sizeof(VarDecl));
-        node->main.type = NODE_VAR_DECL;
-        node->name = name;
-        node->initializer = initializer;
-        return (AstNode*)node;
+
+
+static bool check(TokenType type) {
+    return currentToken.type == type;
+}
+
+static AstNode* parseStructInit(Token typeName) {
+    consume(TOKEN_LEFT_BRACE, "Expect '{' for struct initialization.");
+    
+    Token* fieldNames = malloc(sizeof(Token) * 16);
+    AstNode** values = malloc(sizeof(AstNode*) * 16);
+    int count = 0;
+    
+    if (currentToken.type != TOKEN_RIGHT_BRACE) {
+        do {
+            // key: value
+            consume(TOKEN_IDENTIFIER, "Expect field name.");
+            fieldNames[count] = previousToken;
+            
+            consume(TOKEN_COLON, "Expect ':' after field name.");
+            
+            values[count] = expression();
+            count++;
+        } while (currentToken.type == TOKEN_COMMA && (advance(), 1));
     }
     
+    consume(TOKEN_RIGHT_BRACE, "Expect '}' after struct init.");
+    
+    StructInit* node = malloc(sizeof(StructInit));
+    node->main.type = NODE_STRUCT_INIT;
+    node->structName = typeName;
+    node->fieldNames = fieldNames;
+    node->values = values;
+    node->fieldCount = count;
+    return (AstNode*)node;
+}
+
+// Helper forward decl or static definition
+static AstNode* parseVarDecl(bool typed, Token typeToken) {
+    consume(TOKEN_IDENTIFIER, "Expect variable name.");
+    Token name = previousToken;
+    AstNode* initializer = NULL;
+    if (currentToken.type == TOKEN_EQUAL) {
+        advance();
+        if (currentToken.type == TOKEN_LEFT_BRACE) {
+            // Struct Init syntax: { key: val, ... }
+            if (!typed) {
+                 fprintf(stderr, "[Parser] Cannot infer type for anonymous struct literal.\n");
+                 exit(1);
+            }
+            initializer = parseStructInit(typeToken);
+        } else {
+            initializer = expression();
+        }
+    }
+    consume(TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
+    
+    VarDecl* node = malloc(sizeof(VarDecl));
+    node->main.type = NODE_VAR_DECL;
+    node->name = name;
+    node->typeName = typeToken; // Set if typed
+    node->initializer = initializer;
+    return (AstNode*)node;
+}
+
+static AstNode* declaration() {
+    // 1. Struct Declaration
+    if (currentToken.type == TOKEN_STRUCT) {
+        advance();
+        consume(TOKEN_IDENTIFIER, "Expect struct name.");
+        Token structName = previousToken;
+        consume(TOKEN_LEFT_BRACE, "Expect '{' before struct body.");
+        
+        Token* fields = malloc(sizeof(Token) * 16);
+        Token* fieldTypes = malloc(sizeof(Token) * 16);
+        int fieldCount = 0;
+        
+        while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+             TokenType t = currentToken.type;
+             if (t == TOKEN_TYPE_NUMBER || t == TOKEN_TYPE_TEXT || t == TOKEN_TYPE_BOOLEAN || t == TOKEN_IDENTIFIER) {
+                 fieldTypes[fieldCount] = currentToken;
+                 advance();
+             } else {
+                 fprintf(stderr, "[Parser] Expect field type in struct. Got %d\n", t);
+                 exit(1);
+             }
+             
+             consume(TOKEN_IDENTIFIER, "Expect field name.");
+             fields[fieldCount] = previousToken;
+             fieldCount++;
+        }
+        consume(TOKEN_RIGHT_BRACE, "Expect '}' after struct body.");
+        
+        StructDecl* node = malloc(sizeof(StructDecl));
+        node->main.type = NODE_STRUCT_DECL;
+        node->name = structName;
+        node->fields = fields;
+        node->fieldTypes = fieldTypes;
+        node->fieldCount = fieldCount;
+        return (AstNode*)node;
+    }
+
+    // 2. Typed Declaration or 'var'
+    bool isTyped = false;
+    Token typeToken = {0};
+
+    if (currentToken.type == TOKEN_VAR) {
+        advance();
+        return parseVarDecl(false, (Token){0});
+    }
+    
+    if (currentToken.type == TOKEN_TYPE_NUMBER || 
+        currentToken.type == TOKEN_TYPE_TEXT || 
+        currentToken.type == TOKEN_TYPE_BOOLEAN) {
+        typeToken = currentToken;
+        advance();
+        return parseVarDecl(true, typeToken);
+    }
+    
+    // Identifier check (Struct Type?)
+    // 'StructName varName' -> ID ID
+    if (currentToken.type == TOKEN_IDENTIFIER && nextToken.type == TOKEN_IDENTIFIER) {
+         typeToken = currentToken;
+         advance();
+         return parseVarDecl(true, typeToken);
+    }
+
+    if (currentToken.type == TOKEN_FUNCTION) {
+        advance();
+        consume(TOKEN_IDENTIFIER, "Expect function name.");
+        Token name = previousToken;
+        
+        consume(TOKEN_LEFT_PAREN, "Expect '(' after function name.");
+        
+        Token* params = malloc(sizeof(Token) * 8); // Max 8 params
+        int paramCount = 0;
+        
+        if (currentToken.type != TOKEN_RIGHT_PAREN) {
+            do {
+                consume(TOKEN_IDENTIFIER, "Expect parameter name.");
+                params[paramCount++] = previousToken;
+            } while (currentToken.type == TOKEN_COMMA && (advance(), 1));
+        }
+        consume(TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");
+        
+        consume(TOKEN_LEFT_BRACE, "Expect '{' before function body.");
+        BlockStmt* body = malloc(sizeof(BlockStmt));
+        body->main.type = NODE_BLOCK;
+        body->statements = malloc(sizeof(AstNode*) * 64);
+        body->count = 0;
+        
+        while (currentToken.type != TOKEN_RIGHT_BRACE && currentToken.type != TOKEN_EOF) {
+            body->statements[body->count++] = declaration();
+        }
+        consume(TOKEN_RIGHT_BRACE, "Expect '}' after function body.");
+        
+        FunctionDecl* node = malloc(sizeof(FunctionDecl));
+        node->main.type = NODE_FUNCTION_DECL;
+        node->name = name;
+        node->params = params;
+        node->paramCount = paramCount;
+        node->body = (AstNode*)body;
+        return (AstNode*)node;
+    }
+
     return statement();
 }
 
 static AstNode* statement() {
+    if (currentToken.type == TOKEN_RETURN) {
+        advance();
+        AstNode* value = NULL;
+        if (currentToken.type != TOKEN_SEMICOLON) {
+            value = expression();
+        }
+        consume(TOKEN_SEMICOLON, "Expect ';' after return value.");
+        
+        ReturnStmt* node = malloc(sizeof(ReturnStmt));
+        node->main.type = NODE_RETURN_STMT;
+        node->returnValue = value;
+        return (AstNode*)node;
+    }
+
     if (currentToken.type == TOKEN_IF) {
         advance();
         consume(TOKEN_LEFT_PAREN, "Expect '(' after 'if'.");
