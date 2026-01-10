@@ -148,7 +148,8 @@ void Asm_Cmp_Reg_Imm(Assembler* as, Register dst, int32_t imm) {
     // CMP r64, imm32: 48 81 /7 id
     Asm_Emit8(as, 0x48); // REX.W
     Asm_Emit8(as, 0x81); // CMP opcode
-    uint8_t modrm = ModRM(MOD_DIRECT, 7, dst);  // /7 for CMP
+    // ModRM: Mod=11 (direct), Reg=111 (/7), RM=dst
+    uint8_t modrm = 0xF8 + dst;
     Asm_Emit8(as, modrm);
     
     // Emit imm32 (little-endian)
@@ -162,7 +163,8 @@ void Asm_Cmp_Reg_Reg(Assembler* as, Register dst, Register src) {
     // CMP r64, r64: 48 39 /r
     Asm_Emit8(as, 0x48); // REX.W
     Asm_Emit8(as, 0x39); // CMP opcode
-    uint8_t modrm = ModRM(MOD_DIRECT, src, dst);
+    // ModRM: Mod=11, Reg=src, RM=dst
+    uint8_t modrm = 0xC0 + (src << 3) + dst;
     Asm_Emit8(as, modrm);
 }
 
