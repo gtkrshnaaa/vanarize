@@ -510,6 +510,70 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
 
         case NODE_BINARY_EXPR: {
             BinaryExpr* bin = (BinaryExpr*)node;
+            
+            // Check for comparison operators
+            if (bin->op.type == TOKEN_LESS || bin->op.type == TOKEN_GREATER ||
+                bin->op.type == TOKEN_LESS_EQUAL || bin->op.type == TOKEN_GREATER_EQUAL ||
+                bin->op.type == TOKEN_EQUAL_EQUAL || bin->op.type == TOKEN_BANG_EQUAL) {
+                
+                // Emit left operand -> RAX
+                emitNode(as, bin->left, ctx);
+                Asm_Push(as, RAX);
+                
+                // Emit right operand -> RAX
+                emitNode(as, bin->right, ctx);
+                Asm_Pop(as, RCX); // left in RCX, right in RAX
+                
+                // Compare: CMP RCX, RAX (compares left vs right)
+                // Assuming values are raw integers for now.
+                // For Vanarize values, need to unbox first.
+                // For simplicity, assuming numbers are already in RAX/RCX.
+                Asm_Cmp_Reg_Reg(as, RCX, RAX);
+                
+                // Set RAX based on comparison result
+                // Use SETcc to set AL (low byte of RAX) to 1 or 0
+                Asm_Emit8(as, 0x48); // REX.W
+                Asm_Emit8(as, 0x31); // XOR
+                Asm_Emit8(as, 0xC0); // RAX, RAX (zero RAX)
+                
+                // SETcc AL based on condition
+                if (bin->op.type == TOKEN_LESS) {
+                    // SETL AL (set if less - signed)
+                    Asm_Emit8(as, 0x0F);
+                    Asm_Emit8(as, 0x9C); // SETL
+                    Asm_Emit8(as, 0xC0); // AL
+                } else if (bin->op.type == TOKEN_GREATER) {
+                    // SETG AL
+                    Asm_Emit8(as, 0x0F);
+                    Asm_Emit8(as, 0x9F);
+                    Asm_Emit8(as, 0xC0);
+                } else if (bin->op.type == TOKEN_LESS_EQUAL) {
+                    // SETLE AL
+                    Asm_Emit8(as, 0x0F);
+                    Asm_Emit8(as, 0x9E);
+                    Asm_Emit8(as, 0xC0);
+                } else if (bin->op.type == TOKEN_GREATER_EQUAL) {
+                    // SETGE AL
+                    Asm_Emit8(as, 0x0F);
+                    Asm_Emit8(as, 0x9D);
+                    Asm_Emit8(as, 0xC0);
+                } else if (bin->op.type == TOKEN_EQUAL_EQUAL) {
+                    // SETE AL
+                    Asm_Emit8(as, 0x0F);
+                    Asm_Emit8(as, 0x94);
+                    Asm_Emit8(as, 0xC0);
+                } else if (bin->op.type == TOKEN_BANG_EQUAL) {
+                    // SETNE AL
+                    Asm_Emit8(as, 0x0F);
+                    Asm_Emit8(as, 0x95);
+                    Asm_Emit8(as, 0xC0);
+                }
+                
+                // RAX now contains 0 or 1 (boolean result)
+                break;
+            }
+            
+            // Arithmetic operators
             emitNode(as, bin->left, ctx);
             Asm_Push(as, RAX);
             emitNode(as, bin->right, ctx);
@@ -524,7 +588,20 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             
             if (bin->op.type == TOKEN_PLUS) {
                 Asm_Add_Reg_Reg(as, RAX, RCX);
-            } 
+            } else if (bin->op.type == TOKEN_MINUS) {
+                // SUB: RCX - RAX -> result
+                // We want: left(RCX) - right(RAX)
+                // SUB dst, src means dst = dst - src
+                // So: SUB RCX, RAX then MOV RAX, RCX
+                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x29);
+                Asm_Emit8(as, 0xC1); // SUB RCX, RAX
+                Asm_Mov_Reg_Reg(as, RAX, RCX);
+            } else if (bin->op.type == TOKEN_STAR) {
+                // IMUL RCX, RAX
+                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
+                Asm_Emit8(as, 0xAF); Asm_Emit8(as, 0xC8); // IMUL RCX, RAX
+                Asm_Mov_Reg_Reg(as, RAX, RCX);
+            }
             break;
         }
 
@@ -603,35 +680,38 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
         }
 
         case NODE_WHILE_STMT: {
-            WhileStmt* stmt = (WhileStmt*)node;
+            WhileStmt* whileStmt = (WhileStmt*)node;
+            
+            // Loop start
             size_t loopStart = as->offset;
             
-            // 1. Compile Condition
-            emitNode(as, stmt->condition, ctx);
+            // Evaluate condition -> RAX (0 or 1)
+            emitNode(as, whileStmt->condition, ctx);
             
-            // 2. CMP RAX, VAL_FALSE
-            Asm_Mov_Imm64(as, RCX, VAL_FALSE);
-            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8);
+            // Test if RAX is 0 (false)
+            // TEST RAX, RAX
+            Asm_Emit8(as, 0x48); // REX.W
+            Asm_Emit8(as, 0x85); // TEST
+            Asm_Emit8(as, 0xC0); // RAX, RAX
             
-            // 3. JE end
-            size_t loopEndPatch = as->offset + 2;
-            Asm_Je(as, 0);
+            // JE (jump if zero) to loop end - placeholder
+            Asm_Emit8(as, 0x0F); // JE rel32
+            Asm_Emit8(as, 0x84);
+            size_t loopEndPatch = as->offset;
+            Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
+            Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); // placeholder
             
-            // 4. Body
-            emitNode(as, stmt->body, ctx);
+            // Loop body
+            emitNode(as, whileStmt->body, ctx);
             
-            // 5. JMP start (Backwards)
-            size_t jmpBackStart = as->offset;
-            // Dist = Target - (Source + 5)
-            // Target = loopStart. Source = jmpBackStart.
-            // Dist = loopStart - (jmpBackStart + 5).
-            int32_t backDist = (int32_t)(loopStart - (jmpBackStart + 5));
-            Asm_Jmp(as, backDist);
+            // Jump back to loop start
+            int32_t backOffset = loopStart - (as->offset + 5);
+            Asm_Jmp(as, backOffset);
             
-            // 6. Patch JE to end
-            size_t endOffset = as->offset;
-            int32_t exitDist = (int32_t)(endOffset - (loopEndPatch + 4));
-            Asm_Patch32(as, loopEndPatch, exitDist);
+            // Patch the loop end jump
+            size_t loopEnd = as->offset;
+            int32_t forwardOffset = loopEnd - (loopEndPatch + 4);
+            Asm_Patch32(as, loopEndPatch, forwardOffset);
             
             break;
         }
