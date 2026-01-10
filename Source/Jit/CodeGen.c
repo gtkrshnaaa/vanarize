@@ -522,19 +522,19 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 
                 // Emit right operand -> RAX
                 emitNode(as, bin->right, ctx);
-                Asm_Pop(as, RCX); // left in RCX, right in RAX
+                Asm_Mov_Reg_Reg(as, RCX, RAX); // right in RCX
+                Asm_Pop(as, RAX); // left in RAX
                 
-                // Compare: CMP RCX, RAX (compares left vs right)
+                // Compare: CMP RAX, RCX (compares left vs right)
                 // Assuming values are raw integers for now.
                 // For Vanarize values, need to unbox first.
                 // For simplicity, assuming numbers are already in RAX/RCX.
-                Asm_Cmp_Reg_Reg(as, RCX, RAX);
+                Asm_Cmp_Reg_Reg(as, RAX, RCX);
                 
-                // Set RAX based on comparison result
-                // Use SETcc to set AL (low byte of RAX) to 1 or 0
+                // Zero RAX first
                 Asm_Emit8(as, 0x48); // REX.W
                 Asm_Emit8(as, 0x31); // XOR
-                Asm_Emit8(as, 0xC0); // RAX, RAX (zero RAX)
+                Asm_Emit8(as, 0xC0); // RAX, RAX
                 
                 // SETcc AL based on condition
                 if (bin->op.type == TOKEN_LESS) {
@@ -569,7 +569,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     Asm_Emit8(as, 0xC0);
                 }
                 
-                // RAX now contains 0 or 1 (boolean result)
+                // Now AL contains 0 or 1, RAX is the full result
                 break;
             }
             
