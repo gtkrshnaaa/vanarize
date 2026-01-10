@@ -40,8 +40,10 @@ int main(int argc, char* argv[]) {
     }
     
     // Initialize GC and Memory
+    // Initialize Core
+    int stackDummy;
     VM_InitMemory();
-    GC_Init();
+    GC_Init(&stackDummy);
     
     JitFunction func = Jit_Compile(root);
     func();
