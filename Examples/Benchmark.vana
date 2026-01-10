@@ -1,29 +1,14 @@
-// VANARIZE BENCHMARK: Performance Measurement
-// Target: 1.2 billion operations per second
-
-function BenchmarkArithmetic() :: number {
-    number iterations = 10000000;
-    number i = 0;
-    number result = 0;
-    
-    // Start timer
-    StdTime.Measure();
-    
-    while (i < iterations) {
-        result = result + i;
+function Measure() {
+    var start = clock();
+    var i = 0;
+    while (i < 10000000) {
         i = i + 1;
     }
-    
-    // Stop timer and get elapsed nanoseconds
-    number elapsed = StdTime.Measure();
-    
-    // Calculate ops/sec
-    number opsPerSec = iterations * 1000000000 / elapsed;
-    
-    return opsPerSec;
+    var end = clock();
+    print("Time: " + (end - start));
+    print("Ops: " + 10000000);
 }
 
 function Main() {
-    number ops = BenchmarkArithmetic();
-    print(ops);
+    Measure();
 }
