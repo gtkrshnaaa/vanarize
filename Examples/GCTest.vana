@@ -1,0 +1,27 @@
+function CreateString() {
+    return "This is a string that should survive GC " + "concatenation";
+}
+
+function Recursive(n, keepAlive) {
+    if (n == 0) {
+        // Trigger lots of allocations to force GC
+        var i = 0;
+        while (i < 1000) {
+            var junk = "Allocating junk " + " to trigger GC " + i;
+            i = i + 1;
+        }
+        print("GC Triggered (hopefully)");
+        return;
+    }
+    
+    // keepAlive is on the stack here
+    Recursive(n - 1, keepAlive);
+    
+    // Use keepAlive after return. If GC swept it, this might crash or print garbage.
+    print(keepAlive); 
+}
+
+function Main() {
+    var keepAlive = CreateString();
+    Recursive(10, keepAlive);
+}
