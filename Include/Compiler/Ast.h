@@ -19,7 +19,8 @@ typedef enum {
     NODE_WHILE_STMT,
     NODE_STRUCT_DECL,
     NODE_STRUCT_INIT,
-    NODE_GET_EXPR // obj.field
+    NODE_GET_EXPR, // obj.field
+    NODE_UNARY_EXPR
 } NodeType;
 
 typedef struct AstNode AstNode;
@@ -40,6 +41,12 @@ typedef struct {
     AstNode main;
     Token token; // For Number or String
 } LiteralExpr;
+
+typedef struct {
+    AstNode main;
+    Token op;
+    AstNode* right;
+} UnaryExpr;
 
 typedef struct {
     AstNode main;

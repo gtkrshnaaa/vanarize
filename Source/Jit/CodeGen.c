@@ -8,6 +8,7 @@
 #include "Core/GarbageCollector.h"
 #include "Core/Native.h"
 #include "StdLib/StdTime.h"
+#include "StdLib/StdMath.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -527,6 +528,37 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                             Asm_Call_Reg(as, RAX);
                             break;
                         }
+                    } else if (ns.length == 7 && memcmp(ns.start, "StdMath", 7) == 0) {
+                        void* funcPtr = NULL;
+                        // Single argument math functions
+                        
+                        if (method.length == 3 && memcmp(method.start, "Sin", 3) == 0) {
+                             funcPtr = (void*)StdMath_Sin;
+                        } else if (method.length == 3 && memcmp(method.start, "Cos", 3) == 0) {
+                             funcPtr = (void*)StdMath_Cos;
+                        } else if (method.length == 3 && memcmp(method.start, "Tan", 3) == 0) {
+                             funcPtr = (void*)StdMath_Tan;
+                        } else if (method.length == 4 && memcmp(method.start, "Sqrt", 4) == 0) {
+                             funcPtr = (void*)StdMath_Sqrt;
+                        } else if (method.length == 3 && memcmp(method.start, "Abs", 3) == 0) {
+                             funcPtr = (void*)StdMath_Abs;
+                        } else if (method.length == 5 && memcmp(method.start, "Floor", 5) == 0) {
+                             funcPtr = (void*)StdMath_Floor;
+                        } else if (method.length == 4 && memcmp(method.start, "Ceil", 4) == 0) {
+                             funcPtr = (void*)StdMath_Ceil; 
+                        }
+                        
+                        if (funcPtr) {
+                            // 1 Arg
+                            if (call->argCount > 0) {
+                                emitNode(as, call->args[0], ctx);
+                                Asm_Push(as, RAX); 
+                                Asm_Pop(as, RDI); 
+                            }
+                            Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                            Asm_Call_Reg(as, RAX);
+                            break;
+                        }
                     }
                 }
 
@@ -778,6 +810,36 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 // MOVQ RAX, XMM0: 66 48 0F 7E C0
                 Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
                 Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0);
+            }
+            break;
+        }
+
+        case NODE_UNARY_EXPR: {
+            UnaryExpr* unary = (UnaryExpr*)node;
+            emitNode(as, unary->right, ctx);
+            // RAX has operand
+            
+            if (unary->op.type == TOKEN_MINUS) {
+                // Negate Number
+                Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
+                Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x57); Asm_Emit8(as, 0xC9); // XORPS XMM1, XMM1 (0.0)
+                Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x5C); Asm_Emit8(as, 0xC8); // SUBSD XMM1, XMM0
+                Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC8); // MOVQ RAX, XMM1
+            } 
+            else if (unary->op.type == TOKEN_BANG) {
+                // Not (!)
+                Asm_Mov_Imm64(as, RCX, VAL_FALSE);
+                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8); // CMP RAX, RCX
+                size_t jumpTrue = as->offset + 2;
+                Asm_Je(as, 0);
+                Asm_Mov_Imm64(as, RAX, VAL_FALSE);
+                size_t jumpEnd = as->offset + 2;
+                Asm_Jmp(as, 0); // JMP End
+                size_t trueStart = as->offset;
+                Asm_Patch32(as, jumpTrue, trueStart - (jumpTrue + 4));
+                Asm_Mov_Imm64(as, RAX, VAL_TRUE);
+                size_t endStart = as->offset;
+                Asm_Patch32(as, jumpEnd, endStart - (jumpEnd + 4));
             }
             break;
         }

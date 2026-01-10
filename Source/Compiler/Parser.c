@@ -153,20 +153,18 @@ static AstNode* call() {
             advance();
             CallExpr* node = malloc(sizeof(CallExpr));
             node->main.type = NODE_CALL_EXPR;
-            node->callee = expr; // Store the expression (identifier or GET_EXPR for namespace.method)
+            node->callee = expr;
             
-            // We need to store arguments.
-            node->args = malloc(sizeof(AstNode*) * 8); // Max 8 args for now
+            node->args = malloc(sizeof(AstNode*) * 8);
             node->argCount = 0;
             
             if (currentToken.type != TOKEN_RIGHT_PAREN) {
                 do {
                     node->args[node->argCount++] = expression();
-                } while (currentToken.type == TOKEN_COMMA && (advance(), 1)); // Cute comma skip
+                } while (currentToken.type == TOKEN_COMMA && (advance(), 1));
             }
             
             consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
-            
             expr = (AstNode*)node;
         } else if (currentToken.type == TOKEN_DOT) {
             advance();
@@ -182,18 +180,31 @@ static AstNode* call() {
             break;
         }
     }
-    
     return expr;
 }
 
+static AstNode* unary() {
+    if (currentToken.type == TOKEN_BANG || currentToken.type == TOKEN_MINUS) {
+        Token op = currentToken;
+        advance();
+        AstNode* right = unary();
+        
+        UnaryExpr* node = malloc(sizeof(UnaryExpr));
+        node->main.type = NODE_UNARY_EXPR;
+        node->op = op;
+        node->right = right;
+        return (AstNode*)node;
+    }
+    return call();
+}
+
 static AstNode* factor() {
-    AstNode* expr = call();
-    // ... rest same
+    AstNode* expr = unary();
     
     while (currentToken.type == TOKEN_SLASH || currentToken.type == TOKEN_STAR) {
         Token op = currentToken;
         advance();
-        AstNode* right = call(); // Was incorrectly primary()!
+        AstNode* right = unary();
         
         BinaryExpr* node = malloc(sizeof(BinaryExpr));
         node->main.type = NODE_BINARY_EXPR;
@@ -205,6 +216,7 @@ static AstNode* factor() {
     
     return expr;
 }
+
 
 static AstNode* primary() {
     if (currentToken.type == TOKEN_NUMBER) {
@@ -247,6 +259,13 @@ static AstNode* primary() {
         node->token = currentToken;
         advance();
         return (AstNode*)node;
+    }
+    
+    if (currentToken.type == TOKEN_LEFT_PAREN) {
+        advance();
+        AstNode* expr = expression();
+        consume(TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
+        return expr;
     }
     
     // Grouping, etc. omitted for briefness
