@@ -86,6 +86,26 @@ static AstNode* assignment() {
 static AstNode* term() {
     AstNode* expr = factor();
     
+    // Comparison operators: <, >, <=, >=, ==, !=
+    while (currentToken.type == TOKEN_LESS || 
+           currentToken.type == TOKEN_GREATER ||
+           currentToken.type == TOKEN_LESS_EQUAL ||
+           currentToken.type == TOKEN_GREATER_EQUAL ||
+           currentToken.type == TOKEN_EQUAL_EQUAL ||
+           currentToken.type == TOKEN_BANG_EQUAL) {
+        Token op = currentToken;
+        advance();
+        AstNode* right = factor();
+        
+        BinaryExpr* node = malloc(sizeof(BinaryExpr));
+        node->main.type = NODE_BINARY_EXPR;
+        node->left = expr;
+        node->right = right;
+        node->op = op;
+        expr = (AstNode*)node;
+    }
+    
+    // Addition and subtraction
     while (currentToken.type == TOKEN_PLUS || currentToken.type == TOKEN_MINUS) {
         Token op = currentToken;
         advance();
