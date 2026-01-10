@@ -7,7 +7,7 @@ function BenchmarkArithmetic() :: number {
     number result = 0;
     
     // Start timer
-    StdTimeMeasure();
+    StdTime.Measure();
     
     while (i < iterations) {
         result = result + i;
@@ -15,10 +15,9 @@ function BenchmarkArithmetic() :: number {
     }
     
     // Stop timer and get elapsed nanoseconds
-    number elapsed = StdTimeMeasure();
+    number elapsed = StdTime.Measure();
     
     // Calculate ops/sec
-    // ops/sec = iterations / (elapsed / 1e9)
     number opsPerSec = iterations * 1000000000 / elapsed;
     
     return opsPerSec;

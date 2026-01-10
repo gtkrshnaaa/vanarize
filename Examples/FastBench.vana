@@ -1,0 +1,19 @@
+// Fast Arithmetic Benchmark - 100M operations
+function Main() {
+    number iterations = 100000000;
+    number i = 0;
+    number sum = 0;
+    
+    StdTime.Measure();
+    
+    while (i < iterations) {
+        sum = sum + i;
+        i = i + 1;
+    }
+    
+    number elapsed = StdTime.Measure();
+    number billion = 1000000000;
+    number opsPerSec = iterations * billion / elapsed;
+    
+    print(opsPerSec);
+}
