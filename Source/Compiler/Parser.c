@@ -39,17 +39,7 @@ void Parser_Init(const char* source) {
 
 // Forward decls
 static AstNode* expression();
-static AstNode* term();
-static AstNode* factor();
-static AstNode* primary();
-
-
-
-// Need to ensure full hierarchy:
-// expression -> assignment
-// assignment -> logic_or (if exists) -> ... -> equality -> comparison -> term -> factor -> unary -> call -> primary
-
-// Forward decls for hierarchy
+static AstNode* assignment();
 static AstNode* equality();
 static AstNode* comparison();
 static AstNode* term();
@@ -57,6 +47,7 @@ static AstNode* factor();
 static AstNode* unary();
 static AstNode* call();
 static AstNode* primary();
+static AstNode* statement();
 
 static AstNode* expression() {
     return assignment();
