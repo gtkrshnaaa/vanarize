@@ -5,13 +5,18 @@ function Main() {
     
     StdTime.Measure();
     
-    while (i < 1000000) {
+    // 10 Million iterations
+    while (i < 10000000) {
         sum = sum + i;
         i = i + 1;
     }
     
     number elapsed = StdTime.Measure();
-    number ops = 1000000 * 1000000000 / elapsed;
-    
-    print(ops);
+print(elapsed);
+if (elapsed == 0) {
+    print("Elapsed is zero!");
+    elapsed = 1; // Prevent division by zero
+}
+number ops = 10000000 * 1000000000 / elapsed;
+print(ops);
 }

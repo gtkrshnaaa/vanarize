@@ -1,4 +1,5 @@
 #include "StdLib/StdTime.h"
+#include "Core/VanarizeValue.h"
 #include <time.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -7,10 +8,16 @@
 static uint64_t measureStart = 0;
 static int measureActive = 0;
 
-uint64_t StdTime_Now(void) {
+uint64_t StdTime_GetRaw(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+// Exposed to Vanarize -> Must return Value
+Value StdTime_Now(void) {
+    double ns = (double)StdTime_GetRaw();
+    return NumberToValue(ns);
 }
 
 void StdTime_Sleep(uint64_t ms) {
@@ -20,16 +27,18 @@ void StdTime_Sleep(uint64_t ms) {
     nanosleep(&req, NULL);
 }
 
-uint64_t StdTime_Measure(void) {
+// Exposed to Vanarize -> Must return Value
+Value StdTime_Measure(void) {
     if (!measureActive) {
         // Start timer
-        measureStart = StdTime_Now();
+        measureStart = StdTime_GetRaw();
         measureActive = 1;
-        return 0;
+        return NumberToValue(0.0);
     } else {
         // Stop timer and return elapsed
-        uint64_t elapsed = StdTime_Now() - measureStart;
+        uint64_t current = StdTime_GetRaw();
+        double elapsed = (double)(current - measureStart);
         measureActive = 0;
-        return elapsed;
+        return NumberToValue(elapsed);
     }
 }
