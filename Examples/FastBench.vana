@@ -1,4 +1,5 @@
 // Fast Arithmetic Benchmark - 100M operations
+// Master Plan Compliance: StdTime usage, Typed definitions
 function Main() {
     number iterations = 100000000;
     number i = 0;
