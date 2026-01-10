@@ -15,7 +15,11 @@ typedef enum {
     NODE_BLOCK,
     NODE_RETURN_STMT,
     NODE_IF_STMT,
-    NODE_WHILE_STMT
+
+    NODE_WHILE_STMT,
+    NODE_STRUCT_DECL,
+    NODE_STRUCT_INIT,
+    NODE_GET_EXPR // obj.field
 } NodeType;
 
 typedef struct AstNode AstNode;
@@ -48,6 +52,7 @@ typedef struct {
 typedef struct {
     AstNode main;
     Token name;
+    Token typeName; // e.g. "number", "SensorData" or empty (nested check)
     AstNode* initializer;
 } VarDecl;
 
@@ -85,6 +90,37 @@ typedef struct {
     AstNode* condition;
     AstNode* body;
 } WhileStmt;
+
+typedef struct {
+    AstNode main;
+    Token name;
+    Token* params;
+    int paramCount;
+    AstNode* body;
+} FunctionDecl;
+
+// Structs
+typedef struct {
+    AstNode main;
+    Token name;
+    Token* fields;     // Array of field names
+    Token* fieldTypes; // Array of field types (Tokens)
+    int fieldCount;
+} StructDecl;
+
+typedef struct {
+    AstNode main;
+    Token structName;
+    Token* fieldNames;
+    AstNode** values; // Expressions
+    int fieldCount;
+} StructInit;
+
+typedef struct {
+    AstNode main;
+    AstNode* object;
+    Token name; // Property name
+} GetExpr;
 
 typedef struct {
     AstNode main;
