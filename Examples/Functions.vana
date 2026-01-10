@@ -1,4 +1,5 @@
 // VANARIZE TEST: Function Calls and Return Values
+// Master Plan Compliance: PascalCase Functions, Typed Params/Return
 
 function Add(number a, number b) :: number {
     return a + b;
