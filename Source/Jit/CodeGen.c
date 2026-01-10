@@ -808,8 +808,8 @@ JitFunction Jit_Compile(AstNode* root) {
                     Asm_Pop(&mainAs, RBP);
                     Asm_Ret(&mainAs);
                     
-                    void* mainCode = Jit_AllocExec(mainAs.position);
-                    memcpy(mainCode, mainAs.buffer, mainAs.position);
+                    void* mainCode = Jit_AllocExec(mainAs.offset);
+                    memcpy(mainCode, mainAs.buffer, mainAs.offset);
                     
                     return (JitFunction)mainCode;
                 }
