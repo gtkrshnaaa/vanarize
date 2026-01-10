@@ -45,15 +45,25 @@ static AstNode* primary();
 
 
 
-// Correct implementation of assignment:
-static AstNode* assignment();
+// Need to ensure full hierarchy:
+// expression -> assignment
+// assignment -> logic_or (if exists) -> ... -> equality -> comparison -> term -> factor -> unary -> call -> primary
+
+// Forward decls for hierarchy
+static AstNode* equality();
+static AstNode* comparison();
+static AstNode* term();
+static AstNode* factor();
+static AstNode* unary();
+static AstNode* call();
+static AstNode* primary();
 
 static AstNode* expression() {
     return assignment();
 }
 
 static AstNode* assignment() {
-    AstNode* expr = term();
+    AstNode* expr = equality();
     
     if (currentToken.type == TOKEN_EQUAL) {
         advance();
@@ -83,19 +93,13 @@ static AstNode* assignment() {
 // primary() parses literals and identifiers.
 
 
-static AstNode* term() {
-    AstNode* expr = factor();
+static AstNode* equality() {
+    AstNode* expr = comparison();
     
-    // Comparison operators: <, >, <=, >=, ==, !=
-    while (currentToken.type == TOKEN_LESS || 
-           currentToken.type == TOKEN_GREATER ||
-           currentToken.type == TOKEN_LESS_EQUAL ||
-           currentToken.type == TOKEN_GREATER_EQUAL ||
-           currentToken.type == TOKEN_EQUAL_EQUAL ||
-           currentToken.type == TOKEN_BANG_EQUAL) {
+    while (currentToken.type == TOKEN_EQUAL_EQUAL || currentToken.type == TOKEN_BANG_EQUAL) {
         Token op = currentToken;
         advance();
-        AstNode* right = factor();
+        AstNode* right = comparison();
         
         BinaryExpr* node = malloc(sizeof(BinaryExpr));
         node->main.type = NODE_BINARY_EXPR;
@@ -104,6 +108,32 @@ static AstNode* term() {
         node->op = op;
         expr = (AstNode*)node;
     }
+    return expr;
+}
+
+static AstNode* comparison() {
+    AstNode* expr = term();
+    
+    while (currentToken.type == TOKEN_LESS || 
+           currentToken.type == TOKEN_GREATER ||
+           currentToken.type == TOKEN_LESS_EQUAL ||
+           currentToken.type == TOKEN_GREATER_EQUAL) {
+        Token op = currentToken;
+        advance();
+        AstNode* right = term();
+        
+        BinaryExpr* node = malloc(sizeof(BinaryExpr));
+        node->main.type = NODE_BINARY_EXPR;
+        node->left = expr;
+        node->right = right;
+        node->op = op;
+        expr = (AstNode*)node;
+    }
+    return expr;
+}
+
+static AstNode* term() {
+    AstNode* expr = factor();
     
     // Addition and subtraction
     while (currentToken.type == TOKEN_PLUS || currentToken.type == TOKEN_MINUS) {

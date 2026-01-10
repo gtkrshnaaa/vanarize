@@ -47,6 +47,45 @@ static StructInfo* resolveStruct(Token* name) {
     return NULL;
 }
 
+// Global Function Table
+typedef struct {
+    Token name;
+    void* address; // Pointer to JITted code
+} FuncEntry;
+
+static FuncEntry globalFunctions[128];
+static int globalFuncCount = 0;
+
+static int resolveGlobalFunction(Token* name) {
+    for(int i=0; i<globalFuncCount; i++) {
+        Token* fName = &globalFunctions[i].name;
+        if (fName->length == name->length && memcmp(fName->start, name->start, name->length) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void registerGlobalFunctions(AstNode* root) {
+    // Reset count for new compilation (simplified)
+    globalFuncCount = 0; 
+    
+    // Assume root is a list of declarations (Program usually)
+    if (root->type == NODE_BLOCK) {
+        BlockStmt* block = (BlockStmt*)root;
+        for(int i=0; i<block->count; i++) {
+            if (block->statements[i]->type == NODE_FUNCTION_DECL) {
+                FunctionDecl* func = (FunctionDecl*)block->statements[i];
+                if (globalFuncCount < 128) {
+                    globalFunctions[globalFuncCount].name = func->name;
+                    globalFunctions[globalFuncCount].address = NULL;
+                    globalFuncCount++;
+                }
+            }
+        }
+    }
+}
+
 static int getFieldOffset(StructInfo* info, Token* field) {
     for (int i=0; i<info->fieldCount; i++) {
         Token* fName = &info->fieldNames[i];
@@ -482,8 +521,23 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     Asm_Mov_Reg_Mem(as, RAX, RBP, -offset);
                     Asm_Push(as, RAX);
                 } else {
-                    fprintf(stderr, "JIT Error: Undefined function '%.*s'\n", calleeName.length, calleeName.start);
-                    exit(1);
+                    // Try Global Function Table
+                    int funcIdx = resolveGlobalFunction(&calleeName);
+                    if (funcIdx != -1) {
+                        // Found global function!
+                        // Load address from table: MOV RAX, [Addr]
+                        // &globalFunctions[funcIdx].address
+                        void* slotAddr = &globalFunctions[funcIdx].address;
+                        Asm_Mov_Reg_Ptr(as, RAX, slotAddr); // RAX = pointer to slot
+                        // Now load the actual code address from the slot
+                        Asm_Mov_Reg_Mem(as, RAX, RAX, 0); // RAX = [RAX]
+                        
+                        // Push to stack (as expected by call logic below)
+                        Asm_Push(as, RAX);
+                    } else {
+                        fprintf(stderr, "JIT Error: Undefined function '%.*s'\n", calleeName.length, calleeName.start);
+                        exit(1);
+                    }
                 }
             }
             else {
@@ -505,8 +559,10 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 }
             }
             
-            // Pop function pointer and call
+            // Pop function pointer and call (pointer pushed above)
             Asm_Pop(as, RCX);
+            // If checking null pointer at runtime were needed, do it here. 
+            // For now assume global function address will be filled by the time it runs.
             Asm_Call_Reg(as, RCX);
             
             break;
@@ -892,78 +948,79 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
 }
 
 JitFunction Jit_Compile(AstNode* root) {
-    // First pass: compile all declarations (functions, structs, etc.)
-    // This pass populates global symbol tables and compiles function bodies into separate blocks.
-    // The 'as' assembler here is a temporary one, its output is not directly used for the final entry point.
-    uint8_t tempBuffer[MAX_JIT_SIZE];
-    Assembler as;
-    Asm_Init(&as, tempBuffer, MAX_JIT_SIZE);
+   if (!root) return NULL;
     
-    CompilerContext ctx = {0};
+    // 1. Register all Global Functions (Forward Reference Support)
+    registerGlobalFunctions(root);
     
-    // Compile all top-level declarations (functions, structs, etc)
-    emitNode(&as, root, &ctx);
+    // 2. Scan and Compile Functions
+    // We expect root to be a block of statements (Global Scope)
     
-    // Now find Main() function and create entry point
-    // Main should be in global function registry
-    Token mainToken;
-    mainToken.start = "Main";
-    mainToken.length = 4;
-    mainToken.type = TOKEN_IDENTIFIER;
+    if (root->type != NODE_BLOCK) {
+        return NULL;
+    }
+    BlockStmt* prog = (BlockStmt*)root;
     
-    // Try to find Main in global functions (if we have a registry)
-    // For now, we need to search the AST for Main function
-    
-    // Create entry point that calls Main()
-    // void* code = Jit_AllocExec(as.size);
-    // memcpy(code, as.code, as.size);
-    
-    // Find Main function in the compiled code
-    // For simple case: root is BlockStmt with function declarations
-    if (root->type == NODE_BLOCK) {
-        BlockStmt* block = (BlockStmt*)root;
-        
-        // Search for Main function
-        for (int i = 0; i < block->count; i++) {
-            if (block->statements[i]->type == NODE_FUNCTION_DECL) {
-                FunctionDecl* func = (FunctionDecl*)block->statements[i];
-                if (func->name.length == 4 && 
-                    memcmp(func->name.start, "Main", 4) == 0) {
-                    
-                    // Found Main! Now we need its compiled address
-                    // Problem: we don't track function addresses during compilation
-                    // Solution: compile Main() body directly as entry point
-                    
-                    // Re-compile just Main's body as the entry point
-                    uint8_t mainBuffer[MAX_JIT_SIZE];
-                    Assembler mainAs;
-                    Asm_Init(&mainAs, mainBuffer, MAX_JIT_SIZE);
-                    CompilerContext mainCtx = {0};
-                    
-                    // Function prologue
-                    Asm_Push(&mainAs, RBP);
-                    Asm_Mov_Reg_Reg(&mainAs, RBP, RSP);
-                    Asm_Emit8(&mainAs, 0x48); Asm_Emit8(&mainAs, 0x83);
-                    Asm_Emit8(&mainAs, 0xEC); Asm_Emit8(&mainAs, 0x40); // sub rsp, 64
-                    
-                    // Compile Main body
-                    emitNode(&mainAs, func->body, &mainCtx);
-                    
-                    // Function epilogue
-                    Asm_Emit8(&mainAs, 0x48); Asm_Emit8(&mainAs, 0x83);
-                    Asm_Emit8(&mainAs, 0xC4); Asm_Emit8(&mainAs, 0x40); // add rsp, 64
-                    Asm_Pop(&mainAs, RBP);
-                    Asm_Ret(&mainAs);
-                    
-                    void* mainCode = Jit_AllocExec(mainAs.offset);
-                    memcpy(mainCode, mainAs.buffer, mainAs.offset);
-                    
-                    return (JitFunction)mainCode;
+    void* mainFunc = NULL;
+
+    for (int i = 0; i < prog->count; i++) {
+        if (prog->statements[i]->type == NODE_FUNCTION_DECL) {
+            FunctionDecl* func = (FunctionDecl*)prog->statements[i];
+            
+            // Find global index
+            int gIdx = resolveGlobalFunction(&func->name);
+            
+            Assembler as;
+            // 64KB per function (plenty)
+            uint8_t buffer[65536]; 
+            Asm_Init(&as, buffer, 65536);
+            
+            // ... (rest of compilation logic)
+            // Function Prologue
+            Asm_Emit8(&as, 0x55);             // push rbp
+            Asm_Mov_Reg_Reg(&as, RBP, RSP);   // mov rbp, rsp
+            
+            CompilerContext ctx = {0};
+            
+            // Parameters
+            // System V: RDI, RSI, RDX, RCX, R8, R9
+            Register paramRegs[] = {RDI, RSI, RDX, RCX, R8, R9};
+            for(int p=0; p<func->paramCount; p++) {
+                if (p < 6) {
+                    ctx.stackSize += 8;
+                    ctx.locals[ctx.localCount].name = func->params[p];
+                    ctx.locals[ctx.localCount].typeName = func->paramTypes[p];
+                    ctx.locals[ctx.localCount].offset = ctx.stackSize;
+                    ctx.localCount++;
+                    // push paramReg to [rbp - offset]
+                    Asm_Mov_Mem_Reg(&as, RBP, -ctx.stackSize, paramRegs[p]);
                 }
+            }
+            
+            // Body
+            emitNode(&as, func->body, &ctx);
+            
+            // Default return (if not present)
+            // Epilogue
+            Asm_Mov_Reg_Reg(&as, RSP, RBP);   // mov rsp, rbp
+            Asm_Pop(&as, RBP);                // pop rbp
+            Asm_Ret(&as);                     // ret
+            
+            // Allocate Executable Memory
+            void* code = Jit_AllocExec(as.offset); // Allocate exact size
+            memcpy(code, as.buffer, as.offset);
+            
+            // Update Global Table
+            if (gIdx != -1) {
+                globalFunctions[gIdx].address = code;
+            }
+            
+            // Check for Main
+            if (func->name.length == 4 && memcmp(func->name.start, "Main", 4) == 0) {
+                mainFunc = code;
             }
         }
     }
     
-    fprintf(stderr, "Error: Main() function not found\n");
-    exit(1);
+    return mainFunc;
 }
