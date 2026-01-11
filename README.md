@@ -12,7 +12,7 @@ Vanarize achieves near-native performance through aggressive JIT optimizations:
 - SIMD Infrastructure: Supports 256-bit AVX instructions for vectorized throughput.
 
 ### Benchmark Metrics (100M iterations)
-Benchmarks were performed on an **Intel Core i5-1153G7 (11th Gen)** with **8GB RAM** running **Ubuntu Linux**.
+Benchmarks were performed on an **Intel Core i5-1135G7 (11th Gen)** with **8GB RAM** running **Ubuntu Linux**.
 
 | Operation Type | Throughput (Ops/Sec) | Latency (ns/op) |
 |----------------|----------------------|-----------------|

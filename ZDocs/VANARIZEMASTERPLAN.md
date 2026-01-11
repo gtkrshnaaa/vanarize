@@ -113,7 +113,7 @@ Variables must be declared with explicit primitive types to enable JIT optimizat
 // Correct: Explicit Typing
 int coreCount = 8
 double clockSpeed = 3.5
-string cpuName = "Intel Core i5-1153G7"
+string cpuName = "Intel Core i5-1135G7"
 boolean isEnabled = true
 
 // Concatenation
