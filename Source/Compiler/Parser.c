@@ -388,7 +388,6 @@ static AstNode* declaration() {
     }
 
     // 2. Typed Declaration or 'var'
-    bool isTyped = false;
     Token typeToken = {0};
 
     if (currentToken.type == TOKEN_VAR) {
