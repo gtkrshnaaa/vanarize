@@ -28,6 +28,9 @@ void Asm_Init(Assembler* as, uint8_t* buffer, size_t capacity);
 // Emit single byte
 void Asm_Emit8(Assembler* as, uint8_t byte);
 
+// Emit 32-bit int
+void Asm_Emit32(Assembler* as, int32_t val);
+
 // Emit specific instructions
 // MOV dst, imm64
 void Asm_Mov_Imm64(Assembler* as, Register dst, uint64_t val);

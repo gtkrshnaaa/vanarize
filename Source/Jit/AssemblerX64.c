@@ -491,3 +491,10 @@ void Asm_Avx_HSum_Double(Assembler* as, YmmRegister src) {
     
     // Result is now in low 64 bits of XMM0
 }
+
+void Asm_Emit32(Assembler* as, int32_t val) {
+    Asm_Emit8(as, (uint8_t)(val & 0xFF));
+    Asm_Emit8(as, (uint8_t)((val >> 8) & 0xFF));
+    Asm_Emit8(as, (uint8_t)((val >> 16) & 0xFF));
+    Asm_Emit8(as, (uint8_t)((val >> 24) & 0xFF));
+}
