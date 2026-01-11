@@ -1,7 +1,7 @@
 function Main() {
     print("Starting Bench...");
     
-    number iterations = 100000000;
+    number iterations = 5000000;
     number i = 0;
     number start = StdTime.Now(); // Nanoseconds
     

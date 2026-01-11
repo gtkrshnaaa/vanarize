@@ -1,0 +1,19 @@
+// Debug integer operations
+function Main() {
+    print("Testing integer ops");
+    
+    // Test 1: Simple assignment
+    number a = 5;
+    print(a);
+    
+    // Test 2: Addition
+    number b = a + 3;
+    print(b);
+    
+    // Test 3: Increment  
+    number c = 0;
+    c = c + 1;
+    print(c);
+    
+    print("Done");
+}
