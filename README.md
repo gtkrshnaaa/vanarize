@@ -21,49 +21,57 @@ Vanarize achieves near-native performance through aggressive JIT optimizations:
 
 ## Syntax Guide
 
-Vanarize uses a strict, C-style syntax designed for predictability and performance.
+Vanarize uses a strict, procedural syntax defined in the Master Plan (Project V).
 
 ### Variable Declarations
+Variables must use explicit primitive types and adhere to camelCase naming.
 ```java
-int count = 100;
-double price = 19.99;
-boolean active = true;
-string name = "Vanarize";
+int userCount = 1024;
+double piValue = 3.14159;
+boolean isActive = true;
+string portalName = "Vanarize";
 ```
 
-### Structs and Objects
+### Data Structures (Structs)
+Structs are Plain Old Data (POD) containers and must use PascalCase.
 ```java
-struct User {
-    int id;
-    string name;
+struct UserProfile {
+    string name
+    int age
+    boolean active
 }
 
-fn main() {
-    User u = User();
-    u.id = 1;
-    u.name = "Admin";
+function Main() {
+    UserProfile admin = {
+        name: "Alice",
+        age: 30,
+        active: true
+    };
 }
 ```
 
 ### Functions and Control Flow
+Functions require PascalCase names and explicit return types using double-colon syntax.
 ```java
-fn fib(int n) int {
+function Fibonacci(int n) :: int {
     if (n < 2) return n;
-    return fib(n - 1) + fib(n - 2);
+    return Fibonacci(n - 1) + Fibonacci(n - 2);
 }
 
-fn loopExample() {
-    for (int i = 0; i < 1000; i = i + 1) {
-        // High-performance JIT-compiled loop
+function IterationDemo() {
+    // Standard C-style for-loop (while is prohibited)
+    for (int i = 0; i < 1000; i++) {
+        print("Iteration: " + i);
     }
 }
 ```
 
 ### Async/Await
+Async functions provide first-class support for the native event loop.
 ```java
-async fn fetchData(string url) string {
-    // Native event-loop integration
-    return await request(url);
+async function FetchNetworkData(string targetUrl) :: string {
+    // Non-blocking network I/O
+    return await StdNetwork.Get(targetUrl);
 }
 ```
 
@@ -71,8 +79,8 @@ async fn fetchData(string url) string {
 - Direct Machine Code Generation: No bytecode or VM interpretation.
 - Strict Type System: Statically typed with explicit primitive widths.
 - Async/Await: Built-in support for asynchronous programming.
-- NaN-Boxing: Efficient 64-bit representation for all values.
-- Modules: Robust import system with namespace resolution.
+- NaN-Boxing: Efficient 64-bit representation for all objects.
+- Modules: Filename-based namespace resolution via import.
 
 ## Building
 Requirements: GCC and an x86-64 Linux environment.
