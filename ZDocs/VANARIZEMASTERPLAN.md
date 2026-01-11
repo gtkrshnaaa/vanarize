@@ -16,7 +16,7 @@ The development of Vanarize adheres to the **"Zero-Dependency Imperative."** The
 ### 1.1 The Fundamental Axioms
 
 1. **Direct Execution Paradigm:** Source code  AST  x64 Machine Code. No intermediate bytecode representation is permitted.
-2. **Type Rigidity:** Types are resolved at compile-time. The `number`, `text`, and `boolean` primitives are strict.
+2. **Type Rigidity:** Types are resolved at compile-time. All 8 Java primitives and `string` are evaluated strictly.
 3. **Syntactic Purity:** The usage of the underscore character (`_`) is strictly prohibited in all identifiers to enforce readability.
 4. **Implicit Modularity:** The file system hierarchy defines the namespace structure.
 5. **Native Asynchrony:** Concurrency is handled via a native Event Loop (epoll/kqueue) integrated with the JIT runtime.
@@ -29,8 +29,8 @@ The development of Vanarize adheres to the **"Zero-Dependency Imperative."** The
 
 To maximize CPU register utilization, Vanarize employs **NaN Boxing** (IEEE 754). All variables, regardless of type, are passed as a 64-bit unsigned integer (`uint64_t`).
 
-* **Double Precision Floats (`number`):** Occupy the full 64 bits.
-* **Pointers (`text`, `struct`):** Stored within the 48-bit significand of a Signaling NaN.
+* **Floating Point (`double`, `float`):** Conform to IEEE 754 standard.
+* **Pointers (`string`, `struct`):** Stored within the 48-bit significand of a Signaling NaN.
 * **Booleans & Null:** Encoded using specific bit-patterns within the high 16 bits (Tagging).
 
 ### 2.2 Memory Management & Garbage Collection
@@ -87,27 +87,38 @@ The core of Vanarize. It translates AST nodes directly into x64 opcodes.
 
 ### 4.1 Primitive Types
 
-| Type | Description | Internal Representation |
-| --- | --- | --- |
-| **`number`** | Numeric value (Integer/Float) | 64-bit IEEE 754 Double |
-| **`text`** | Immutable String | Pointer to Heap-allocated UTF-8 |
-| **`boolean`** | Logical Truth | Tagged Value (1 byte effective) |
-| **`void`** | Empty Return | N/A |
+Vanarize strictly implements the standard Java primitive types for maximum compatibility and predictable performance.
+
+| Type | Bit-width | Description | Internal Representation |
+| --- | --- | --- | --- |
+| **`byte`** | 8 | Signed integer | 8-bit Two's Complement |
+| **`short`** | 16 | Signed integer | 16-bit Two's Complement |
+| **`int`** | 32 | Signed integer | 32-bit Two's Complement |
+| **`long`** | 64 | Signed integer | 64-bit Two's Complement |
+| **`float`** | 32 | Single-precision float | IEEE 754 |
+| **`double`** | 64 | Double-precision float | IEEE 754 |
+| **`char`** | 16 | Unicode character | 16-bit UTF-16 |
+| **`boolean`** | 1 | Logical truth | 1-byte Effective |
+| **`string`** | N/A | Immutable String | Pointer to Heap-allocated UTF-8 |
+
+> [!IMPORTANT]
+> **Strict Type System**: Implicit narrowing conversions (e.g., `long` to `int`) are prohibited. Widening conversions follow Java's rules. Arithmetic between mixed types (e.g., `int` + `double`) results in the most precise type (`double`), matching Java's behavior.
 
 ### 4.2 Syntax Rules
 
 #### A. Variable Declaration & String Concatenation
 
-String concatenation uses the `+` operator.
+String concatenation uses the `+` operator. Supporting types are converted to `string` implicitly during concatenation.
 
 ```javascript
 // Variable: camelCase
-number coreCount = 8
-text cpuName = "Intel Core i5-1153G7"
+int coreCount = 8
+double clockSpeed = 3.5
+string cpuName = "Intel Core i5-1153G7"
+boolean isEnabled = true
 
 // Concatenation
-text status = "CPU: " + cpuName + " has " + coreCount + " cores."
-
+string status = "CPU: " + cpuName + " has " + coreCount + " cores at " + clockSpeed + "GHz."
 ```
 
 #### B. Data Structures (`struct`)
@@ -117,8 +128,8 @@ Classes are rejected in favor of POD (Plain Old Data) Structs.
 ```javascript
 // Struct: PascalCase
 struct NetworkConfig {
-    text hostAddress
-    number portId
+    string hostAddress
+    int portId
     boolean isEncrypted
 }
 
@@ -130,7 +141,7 @@ Loops adhere strictly to the C-style iteration paradigm.
 
 ```javascript
 // Iteration
-for (number i = 0; i < 1000; i++) {
+for (int i = 0; i < 1000; i++) {
     // Logic here
 }
 
@@ -149,12 +160,12 @@ Declared with `function`, PascalCase naming, and `::` return type syntax.
 
 ```javascript
 // Function Definition
-function CalculateVector(number x, number y) :: number {
+function CalculateVector(double x, double y) :: double {
     return x * y
 }
 
 // Void Function
-function PrintStatus(text msg) {
+function PrintStatus(string msg) {
     print(msg)
 }
 
@@ -169,7 +180,7 @@ Imports are relative. The filename becomes the Namespace identifier.
 import "./Libs/MathUtils.vana"
 
 function Main() {
-    number res = MathUtils.Calculate(10)
+    int res = MathUtils.Calculate(10)
 }
 
 ```
@@ -280,13 +291,13 @@ The following code demonstrates the syntactical strictness and capabilities of V
 
 // Struct Definition (PascalCase)
 struct SensorData {
-    text deviceId
-    number temperature
+    string deviceId
+    double temperature
     boolean isActive
 }
 
 // Helper Function (PascalCase)
-function CalibrateSensor(number rawValue) :: number {
+function CalibrateSensor(double rawValue) :: double {
     // Native Math Usage
     return StdMath.Abs(rawValue * 0.98)
 }
@@ -296,11 +307,11 @@ async function UploadData(SensorData data) :: boolean {
     print("Uploading data for: " + data.deviceId)
     
     // JSON Serialization (Native)
-    text payload = StdJson.Stringify(data)
+    string payload = StdJson.Stringify(data)
     
     // Network Request (Native Async)
     // Simulating a POST request
-    text response = await StdNetwork.Post("https://api.vanarize.io/telemetry", payload)
+    string response = await StdNetwork.Post("https://api.vanarize.io/telemetry", payload)
     
     if (response == "200 OK") {
         return true
@@ -313,7 +324,7 @@ async function Main() {
     print("Vanarize System Initializing...")
     
     // Variable Declaration (camelCase)
-    number maxRetries = 3
+    int maxRetries = 3
     
     SensorData mainSensor = {
         deviceId: "Therm-X100",
@@ -327,7 +338,7 @@ async function Main() {
         mainSensor.temperature = CalibrateSensor(mainSensor.temperature)
         
         // Loop Structure (C-Style)
-        for (number i = 1; i <= maxRetries; i++) {
+        for (int i = 1; i <= maxRetries; i++) {
             print("Attempt " + i + "...")
             
             // Await Async Operation
@@ -336,7 +347,7 @@ async function Main() {
             if (success) {
                 print("Upload Successful.")
                 // Native Time Usage
-                number latency = StdTime.Measure()
+                long latency = StdTime.Now() // Fixed example to use long for timestamp
                 print("Operation time: " + latency + "ns")
                 
                 // Break loop manual simulation (if break implemented) or logical exit
@@ -371,7 +382,7 @@ vanarize <filename>.vana
 
 **Process Lifecycle:**
 
-1. **Read:** The CLI loads `<filename>.nara` into memory.
+1. **Read:** The CLI loads `<filename>.vana` into memory.
 2. **Compile:** The JIT Engine translates the entire transitive closure of imports into **x64 Machine Code** in RAM.
 3. **Jump:** The CPU instruction pointer (`RIP`) is moved to the start of the `Main()` function in the generated memory block.
 4. **Terminate:** Upon completion of `Main()`, the process exits with the returned integer code.
@@ -421,9 +432,9 @@ In the event of a syntax error or runtime exception (e.g., Type Mismatch during 
 $ vanarize server.vana
 
 Error in 'server.vana' at line 42:
-42 |    number port = "8080"
+42 |    int port = "8080"
                       ^
-Type Mismatch: Cannot assign type 'text' to variable of type 'number'.
+Type Mismatch: Cannot assign type 'string' to variable of type 'int'.
 
 ```
 
