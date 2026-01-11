@@ -106,8 +106,23 @@ static TokenType identifierType() {
                 }
             }
             break;
-        case 'b': return checkKeyword(1, 6, "oolean", TOKEN_TYPE_BOOLEAN);
-        case 'c': return checkKeyword(1, 4, "lass", TOKEN_CLASS);
+        case 'b': 
+            if (lexer.current - lexer.start > 1) {
+                switch(lexer.start[1]) {
+                    case 'o': return checkKeyword(2, 5, "olean", TOKEN_TYPE_BOOLEAN);
+                    case 'y': return checkKeyword(2, 2, "te", TOKEN_TYPE_BYTE);
+                }
+            }
+            break;
+        case 'c': 
+            if (lexer.current - lexer.start > 1) {
+                switch(lexer.start[1]) {
+                    case 'h': return checkKeyword(2, 2, "ar", TOKEN_TYPE_CHAR);
+                    case 'l': return checkKeyword(2, 3, "ass", TOKEN_CLASS);
+                }
+            }
+            break;
+        case 'd': return checkKeyword(1, 5, "ouble", TOKEN_TYPE_DOUBLE);
         case 'e': return checkKeyword(1, 3, "lse", TOKEN_ELSE);
         case 'f':
             if (lexer.current - lexer.start > 1) {
@@ -115,6 +130,7 @@ static TokenType identifierType() {
                     case 'a': return checkKeyword(2, 3, "lse", TOKEN_FALSE);
                     case 'o': return checkKeyword(2, 1, "r", TOKEN_FOR);
                     case 'u': return checkKeyword(2, 6, "nction", TOKEN_FUNCTION);
+                    case 'l': return checkKeyword(2, 3, "oat", TOKEN_TYPE_FLOAT);
                 }
             }
             break;
@@ -123,17 +139,12 @@ static TokenType identifierType() {
                 switch(lexer.start[1]) {
                     case 'f': return TOKEN_IF;
                     case 'm': return checkKeyword(2, 4, "port", TOKEN_IMPORT);
+                    case 'n': return checkKeyword(2, 1, "t", TOKEN_TYPE_INT);
                 }
             }
             break;
-        case 'n': 
-            if (lexer.current - lexer.start > 1) {
-                switch(lexer.start[1]) {
-                    case 'i': return checkKeyword(2, 1, "l", TOKEN_NIL);
-                    case 'u': return checkKeyword(2, 4, "mber", TOKEN_TYPE_NUMBER);
-                }
-            }
-            break;
+        case 'l': return checkKeyword(1, 3, "ong", TOKEN_TYPE_LONG);
+        case 'n': return checkKeyword(1, 2, "il", TOKEN_NIL);
         case 'o': return checkKeyword(1, 1, "r", TOKEN_OR);
         case 'p': return checkKeyword(1, 4, "rint", TOKEN_PRINT);
         case 'r': return checkKeyword(1, 5, "eturn", TOKEN_RETURN);
@@ -141,7 +152,13 @@ static TokenType identifierType() {
             if (lexer.current - lexer.start > 1) {
                 switch(lexer.start[1]) {
                     case 'u': return checkKeyword(2, 3, "per", TOKEN_SUPER);
-                    case 't': return checkKeyword(2, 4, "ruct", TOKEN_STRUCT);
+                    case 't': 
+                        if (lexer.current - lexer.start > 3) {
+                            if (lexer.start[3] == 'i') return checkKeyword(4, 2, "ng", TOKEN_TYPE_STRING);
+                            if (lexer.start[3] == 'u') return checkKeyword(4, 2, "ct", TOKEN_STRUCT);
+                        }
+                        break;
+                    case 'h': return checkKeyword(2, 3, "ort", TOKEN_TYPE_SHORT);
                 }
             }
             break;
@@ -150,7 +167,6 @@ static TokenType identifierType() {
                 switch (lexer.start[1]) {
                     case 'h': return checkKeyword(2, 2, "is", TOKEN_THIS);
                     case 'r': return checkKeyword(2, 2, "ue", TOKEN_TRUE);
-                    case 'e': return checkKeyword(2, 2, "xt", TOKEN_TYPE_TEXT);
                 }
             }
             break;
