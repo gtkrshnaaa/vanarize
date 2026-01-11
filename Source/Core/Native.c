@@ -21,3 +21,7 @@ void Native_Print(Value val) {
         printf("Unknown Value: %lx\n", val);
     }
 }
+
+void DebugPrintHex(uint64_t val) {
+    printf("DEBUG HEX: %lx\n", val);
+}
