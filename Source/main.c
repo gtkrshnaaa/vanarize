@@ -30,6 +30,10 @@ int main(int argc, char* argv[]) {
         exit(64);
     }
     
+    int stackDummy;
+    VM_InitMemory();
+    GC_Init(&stackDummy);
+    
     char* source = readFile(argv[1]);
     
     Parser_Init(source);
@@ -39,12 +43,7 @@ int main(int argc, char* argv[]) {
         exit(65);
     }
     
-    // Initialize GC and Memory
-    // Initialize Core
-    int stackDummy;
-    VM_InitMemory();
-    GC_Init(&stackDummy);
-    
+    jit_compile_and_run:
     JitFunction func = Jit_Compile(root);
     func();
     

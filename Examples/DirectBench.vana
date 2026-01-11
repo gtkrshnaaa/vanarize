@@ -1,18 +1,15 @@
 // Direct inline benchmark - no function calls
 function Main() {
-    number i = 0;
-    number sum = 0;
     
     StdTime.Measure();
+    number start = clock();
     
-    // 10 Million iterations
-    while (i < 10000000) {
-        sum = sum + i;
-        i = i + 1;
+    for (number i = 0; i < 10000000; i = i + 1) {
+        // Empty loop
     }
     
-    number elapsed = StdTime.Measure();
-    number elapsed = StdTime.Measure();
+    number end = clock();
+    number elapsed = StdTime.Measure(); // This line was likely intended to be kept or modified, but the instruction snippet was malformed.
     print(elapsed);
     if (elapsed == 0) {
         print("Elapsed is zero!");

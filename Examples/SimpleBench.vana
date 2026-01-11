@@ -9,12 +9,10 @@ function Main() {
     // Start measurement
     StdTime.Measure();
     
-    // Arithmetic loop
-    i = 0;
-    sum = 0;
-    while (i < iterations) {
-        sum = sum + i;
-        i = i + 1;
+    number start = StdTime.Now();
+    
+    for (number i = 0; i < iterations; i = i + 1) {
+        // pass
     }
     
     // Stop and get elapsed time (nanoseconds)

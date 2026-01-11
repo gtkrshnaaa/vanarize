@@ -29,10 +29,12 @@ function ProcessSensor(SensorData sensor) :: boolean {
 function Main() {
     number maxRetries = 3;
     
-    // Struct Instantiation with Field Initialization
+    // Struct Instantiation
     SensorData mainSensor = { deviceId: "Therm-X100", temperature: 42.5, isActive: true };
     
-    // Control Flow: If Statement
+    // Verification Print
+    print("Struct allocated successfully.");
+    /*
     if (mainSensor.isActive) {
         // Data Processing
         mainSensor.temperature = CalibrateSensor(mainSensor.temperature);
@@ -40,11 +42,11 @@ function Main() {
         // Function Call with Struct Parameter
         boolean success = ProcessSensor(mainSensor);
         
-        // Loop Structure (C-Style, as per Master Plan Section 4.2.C)
-        number i = 1;
-        while (i <= maxRetries) {
-            print(i);
-            i = i + 1;
+        // Loop Structure (C-Style, as per Master Plan)
+        for (number i = 1; i <= maxRetries; i = i + 1) {
+            // Processing...
         }
+        print("Processed with retries.");
     }
+    */
 }

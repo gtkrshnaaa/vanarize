@@ -4,11 +4,10 @@ function CreateString() :: text {
 
 function Recursive(number n, text keepAlive) {
     if (n == 0) {
-        // Trigger lots of allocations to force GC
-        number i = 0;
-        while (i < 1000) {
+        // Trigger lots of allocations
+        // Create garbage in a loop
+        for (number i = 0; i < 1000; i = i + 1) {
             text junk = "Allocating junk " + " to trigger GC " + i;
-            i = i + 1;
         }
         print("GC Triggered (hopefully)");
         return;

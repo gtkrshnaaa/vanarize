@@ -2,9 +2,7 @@ function Measure() {
     // Native time usage per Master Plan (StdTime.Now)
     // Note: Compiler requires semicolons currently.
     var start = StdTime.Now(); 
-    number i = 0;
-    while (i < 10000000) {
-        i = i + 1;
+    for (number i = 0; i < 10000000; i = i + 1) {
     }
     var end = StdTime.Now();
     print("Time: " + (end - start));

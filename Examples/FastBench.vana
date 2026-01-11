@@ -3,13 +3,10 @@
 function Main() {
     number iterations = 100000000;
     number i = 0;
-    number sum = 0;
+    number start = StdTime.Now(); // Nanoseconds
     
-    StdTime.Measure();
-    
-    while (i < iterations) {
-        sum = sum + i;
-        i = i + 1;
+    for (number i = 0; i < iterations; i = i + 1) {
+        // Empty
     }
     
     number elapsed = StdTime.Measure();

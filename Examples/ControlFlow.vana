@@ -2,15 +2,14 @@
 // Master Plan Compliance: Typed Variables, C-style loops
 
 function Main() {
-    number counter = 0;
+    number sum = 0;
     number max = 5;
-    
-    while (counter < max) {
+    for (number counter = 0; counter < max; counter = counter + 1) {
         if (counter == 3) {
-            print(999);
+            sum = sum + 999;
         } else {
-            print(counter);
+            sum = sum + counter;
         }
-        counter = counter + 1;
     }
+    print("Sum: " + sum);
 }

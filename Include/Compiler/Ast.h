@@ -11,6 +11,7 @@ typedef enum {
     NODE_CALL_EXPR,
     NODE_VAR_DECL,
     NODE_ASSIGNMENT_EXPR,
+    NODE_SET_EXPR,
     NODE_FUNCTION_DECL,
     NODE_BLOCK,
     NODE_RETURN_STMT,
@@ -68,6 +69,13 @@ typedef struct {
     Token name;
     AstNode* value;
 } AssignmentExpr;
+
+typedef struct {
+    AstNode main;
+    AstNode* object;
+    Token name;
+    AstNode* value;
+} SetExpr;
 
 typedef struct {
     AstNode main;

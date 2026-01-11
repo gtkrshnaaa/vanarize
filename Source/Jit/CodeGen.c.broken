@@ -30,44 +30,7 @@ typedef struct {
 } CompilerContext;
 
 // Struct Registry
-typedef struct {
-    Token name;
-    Token fieldNames[32];
-    int fieldCount;
-} StructInfo;
 
-static StructInfo globalStructs[64];
-static int globalStructCount = 0;
-
-static StructInfo* resolveStruct(Token* name) {
-    for (int i = 0; i < globalStructCount; i++) {
-        Token* sName = &globalStructs[i].name;
-        if (sName->length == name->length && 
-            memcmp(sName->start, name->start, name->length) == 0) {
-            return &globalStructs[i];
-        }
-    }
-    return NULL;
-}
-
-static void registerGlobalStructs(AstNode* root) {
-    if (root->type == NODE_BLOCK) {
-        BlockStmt* block = (BlockStmt*)root;
-        for(int i=0; i<block->count; i++) {
-            if (block->statements[i]->type == NODE_STRUCT_DECL) {
-                StructDecl* decl = (StructDecl*)block->statements[i];
-                if (globalStructCount < 64) {
-                    StructInfo* info = &globalStructs[globalStructCount++];
-                    info->name = decl->name;
-                    info->fieldCount = decl->fieldCount;
-                    for(int j=0; j<decl->fieldCount; j++) {
-                        info->fieldNames[j] = decl->fields[j];
-                    }
-                }
-            }
-        }
-    }
-}
 
 // Global Function Table
 typedef struct {
@@ -87,6 +50,8 @@ static int resolveGlobalFunction(Token* name) {
     }
     return -1;
 }
+
+
 
 static void registerGlobalFunctions(AstNode* root) {
     // Reset count for new compilation (simplified)
@@ -108,10 +73,51 @@ static void registerGlobalFunctions(AstNode* root) {
     }
 }
 
+// Global Struct Registry
+typedef struct {
+    Token name;
+    Token fieldNames[32];
+    int fieldCount;
+} StructInfo;
+
+static StructInfo globalStructs[64];
+static int globalStructCount = 0;
+
+static void registerGlobalStructs(AstNode* root) {
+    if (root->type == NODE_BLOCK) {
+        BlockStmt* block = (BlockStmt*)root;
+        for(int i=0; i<block->count; i++) {
+            if (block->statements[i]->type == NODE_STRUCT_DECL) {
+                StructDecl* decl = (StructDecl*)block->statements[i];
+                if (globalStructCount < 64) {
+                    StructInfo* info = &globalStructs[globalStructCount++];
+                    info->name = decl->name;
+                    info->fieldCount = decl->fieldCount;
+                    for(int j=0; j<decl->fieldCount; j++) {
+                        info->fieldNames[j] = decl->fields[j];
+                    }
+                }
+            }
+        }
+    }
+}
+
+static StructInfo* resolveStruct(Token* name) {
+    for (int i = 0; i < globalStructCount; i++) {
+        Token* sName = &globalStructs[i].name;
+        if (sName->length == name->length && 
+            memcmp(sName->start, name->start, name->length) == 0) {
+            return &globalStructs[i];
+        }
+    }
+    return NULL;
+}
+
 static int getFieldOffset(StructInfo* info, Token* field) {
-    for (int i=0; i<info->fieldCount; i++) {
+    for (int i = 0; i < info->fieldCount; i++) {
         Token* fName = &info->fieldNames[i];
-        if (fName->length == field->length && memcmp(fName->start, field->start, field->length) == 0) {
+        if (fName->length == field->length && 
+            memcmp(fName->start, field->start, field->length) == 0) {
             return 24 + (i * 8); // 24 bytes header (16 obj + 8 count/padding) + 8 bytes per field
         }
     }
@@ -165,21 +171,32 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
 
         case NODE_STRUCT_DECL: {
             StructDecl* decl = (StructDecl*)node;
-            // Register struct
-            // No code to emit
+             if (globalStructCount < 64) {
+                StructInfo* info = &globalStructs[globalStructCount++];
+                info->name = decl->name;
+                info->fieldCount = decl->fieldCount;
+                for(int i=0; i<decl->fieldCount; i++) {
+                   info->fieldNames[i] = decl->fields[i];
+                }
+            } else {
+                fprintf(stderr, "JIT Error: Too many structs\n");
+                exit(1);
+            }
             break;
         }
 
         case NODE_STRUCT_INIT: {
+            // Minimal debug: Return NULL
+            Asm_Mov_Imm64(as, RAX, VAL_NULL);
+            break;
+            /*
             StructInit* init = (StructInit*)node;
-            StructInfo* info = resolveStruct(&init->structName);
-            if (!info) {
-                 fprintf(stderr, "JIT Error: Unknown struct type '%.*s'\n", init->structName.length, init->structName.start);
-                 exit(1);
-            }
+            // ... (original content commented out)
+            */
             
             // Allocate ObjStruct
             int size = sizeof(ObjStruct) + (info->fieldCount * 8);
+            /*
             // We need to call malloc at runtime!
             // `Asm_Mov_Reg_Ptr(as, RAX, malloc)` would call C malloc.
             // But we can pre-calculate layout and fill it.
@@ -187,11 +204,14 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // So we emit a call to `malloc(size)`.
             // But we should use our GC allocator later.
             // For now, use `malloc`.
-            
-            Asm_Mov_Imm64(as, RDI, size);
-            void* mallocPtr = (void*)MemAlloc;
-            Asm_Mov_Reg_Ptr(as, RAX, mallocPtr);
-            Asm_Call_Reg(as, RAX);
+                       //
+             //Asm_Mov_Imm64(as, RDI, size);
+             //void* mallocPtr = (void*)MemAlloc;
+             //Asm_Mov_Reg_Ptr(as, RAX, mallocPtr);
+             //Asm_Call_Reg(as, RAX);
+             //
+             static char debugBuffer[256];
+             Asm_Mov_Reg_Ptr(as, RAX, debugBuffer);
             
             // RAX now has pointer
             // Initialize Obj header
@@ -209,15 +229,17 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             Asm_Mov_Mem_Reg(as, RCX, 4, RDX); // Assuming bool is 4 bytes aligned
             
             // Register with GC
+            //
             // Stack is misaligned by 8 bytes due to PUSH RAX
-            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xEC); Asm_Emit8(as, 0x08); // SUB RSP, 8
-            
-            Asm_Mov_Reg_Reg(as, RDI, RAX); // First arg = obj
-            void* gcRegPtr = (void*)GC_RegisterObject;
-            Asm_Mov_Reg_Ptr(as, RAX, gcRegPtr);
-            Asm_Call_Reg(as, RAX);
-            
-            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xC4); Asm_Emit8(as, 0x08); // ADD RSP, 8
+            //Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xEC); Asm_Emit8(as, 0x08); // SUB RSP, 8
+            //
+            //Asm_Mov_Reg_Reg(as, RDI, RAX); // First arg = obj
+            //void* gcRegPtr = (void*)GC_RegisterObject;
+            //Asm_Mov_Reg_Ptr(as, RAX, gcRegPtr);
+            //Asm_Call_Reg(as, RAX);
+            //
+            //Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xC4); Asm_Emit8(as, 0x08); // ADD RSP, 8
+            //
             
             // Restore pointer
             Asm_Pop(as, RAX);
@@ -299,7 +321,8 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             Asm_Mov_Mem_Reg(as, RAX, 16, RCX); // fieldCount at 16.
             // (Assuming writing 64-bit int to 32-bit field is ok/safe if value is small, overwrites padding).
             
-            for (int i=0; i<info->fieldCount; i++) {
+            // Field init disabled for debugging
+            for (int i=0; i<0; i++) {
                  // Find init value for field info->fieldNames[i]
                  AstNode* valExpr = NULL;
                  for (int k=0; k<init->fieldCount; k++) {
@@ -310,21 +333,18 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                      }
                  }
                  
-                 // Compile Value
                  if (valExpr) {
                      emitNode(as, valExpr, ctx);
                  } else {
                      Asm_Mov_Imm64(as, RAX, VAL_NULL);
                  }
                  
-                 // Store to Struct
-                 // StructPtr is at [RSP].
-
-                 // Manually:
-                 Asm_Mov_Reg_Mem(as, RCX, RSP, 0);
-                 
-                 // Offset = 24 + i*8
-                 Asm_Mov_Mem_Reg(as, RCX, 24 + (i * 8), RAX);
+                 // Store to field
+                 Asm_Push(as, RAX); 
+                 Asm_Mov_Reg_Mem(as, RCX, RSP, 8); 
+                 int offset = 24 + (i * 8);
+                 Asm_Pop(as, RAX); 
+                 Asm_Mov_Mem_Reg(as, RCX, offset, RAX);
             }
             
             // Done. Pop StructPtr -> RAX
@@ -357,6 +377,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // If I don't box, it might be treated as double.
             // I MUST Box.
             // `OR RAX, 0xFFFC000000000000`.
+            */
             Asm_Mov_Imm64(as, RCX, 0xFFFC000000000000); 
             Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x09); Asm_Emit8(as, 0xC8); // OR RAX, RCX
             
@@ -448,6 +469,44 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             } else {
                 // Global? Struct field?
                 fprintf(stderr, "Error: Unknown variable '%.*s'\n", assign->name.length, assign->name.start);
+                exit(1);
+            }
+            break;
+        }
+
+        case NODE_SET_EXPR: {
+            SetExpr* set = (SetExpr*)node;
+            // 1. Evaluate Value -> RAX
+            emitNode(as, set->value, ctx);
+            Asm_Push(as, RAX); // Save value
+            
+            // 2. Evaluate Object -> RAX (Pointer)
+            emitNode(as, set->object, ctx);
+            
+            // 3. Resolve Field
+            if (set->object->type == NODE_LITERAL_EXPR) {
+                 LiteralExpr* lit = (LiteralExpr*)set->object;
+                 Token type;
+                 int offsetVar = resolveLocal(ctx, &lit->token, &type);
+                 if (offsetVar != 0) {
+                     StructInfo* info = resolveStruct(&type);
+                     if (info) {
+                         int offset = getFieldOffset(info, &set->name);
+                         Asm_Pop(as, RCX);
+                         if (offset >= 0) {
+                             Asm_Mov_Mem_Reg(as, RAX, offset, RCX);
+                             Asm_Mov_Reg_Reg(as, RAX, RCX); 
+                         } else {
+                             fprintf(stderr, "JIT Error: Unknown field '%.*s'\n", set->name.length, set->name.start);
+                             exit(1);
+                         }
+                     } else {
+                         fprintf(stderr, "JIT Error: Variable '%.*s' is not a struct\n", lit->token.length, lit->token.start);
+                         exit(1);
+                     }
+                 }
+            } else {
+                fprintf(stderr, "JIT: Chained assignment not supported yet.\n");
                 exit(1);
             }
             break;

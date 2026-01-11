@@ -661,11 +661,8 @@ AstNode* Parser_ParseExpression(void) {
     block->statements = malloc(sizeof(AstNode*) * 64); // Max 64 stmts
     block->count = 0;
     
-    block->count = 0;
-    
     while (currentToken.type != TOKEN_EOF) {
-        AstNode* decl = declaration();
-        block->statements[block->count++] = decl;
+        block->statements[block->count++] = declaration();
     }
     
     return (AstNode*)block;

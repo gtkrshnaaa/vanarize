@@ -1,0 +1,3 @@
+function Main() {
+    var x = StdTime.Now();
+}
