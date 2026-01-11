@@ -1362,6 +1362,16 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             break;
         }
 
+        case NODE_AWAIT_EXPR: {
+            // MASTERPLAN: async/await support
+            // MVP: Execute expression synchronously (full async requires event loop integration)
+            AwaitExpr* await = (AwaitExpr*)node;
+            emitNode(as, await->expression, ctx);
+            // Result is in RAX
+            // TODO: Full async with yield to event loop
+            break;
+        }
+
         case NODE_IF_STMT: {
             IfStmt* stmt = (IfStmt*)node;
             // 1. Compile Condition

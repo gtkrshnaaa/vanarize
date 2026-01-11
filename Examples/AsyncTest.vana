@@ -1,0 +1,16 @@
+// AsyncTest.vana - Test async/await syntax
+// MASTERPLAN Compliance Test
+
+async function FetchData() :: int {
+    print("Fetching...");
+    return 42;
+}
+
+async function Main() {
+    print("Async Test Start");
+    
+    int result = await FetchData();
+    print("Result: " + result);
+    
+    print("Async Test Done");
+}

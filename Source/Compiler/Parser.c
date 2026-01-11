@@ -283,6 +283,17 @@ static AstNode* call() {
 }
 
 static AstNode* unary() {
+    // MASTERPLAN: await expression parsing
+    if (currentToken.type == TOKEN_AWAIT) {
+        advance();
+        AstNode* expr = unary();  // Parse the awaited expression
+        
+        AwaitExpr* node = malloc(sizeof(AwaitExpr));
+        node->main.type = NODE_AWAIT_EXPR;
+        node->expression = expr;
+        return (AstNode*)node;
+    }
+    
     if (currentToken.type == TOKEN_BANG || currentToken.type == TOKEN_MINUS) {
         Token op = currentToken;
         advance();
@@ -553,6 +564,13 @@ static AstNode* declaration() {
          return parseVarDecl(true, typeToken);
     }
 
+    // MASTERPLAN: async function support
+    int isAsync = 0;
+    if (currentToken.type == TOKEN_ASYNC) {
+        isAsync = 1;
+        advance();
+    }
+
     if (currentToken.type == TOKEN_FUNCTION) {
         advance();
         consume(TOKEN_IDENTIFIER, "Expect function name.");
@@ -642,6 +660,7 @@ static AstNode* declaration() {
         node->paramCount = paramCount;
         node->returnType = returnType;
         node->body = (AstNode*)body;
+        node->isAsync = isAsync;  // MASTERPLAN: async flag
         return (AstNode*)node;
     }
 

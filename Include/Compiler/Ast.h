@@ -21,7 +21,8 @@ typedef enum {
     NODE_STRUCT_DECL,
     NODE_STRUCT_INIT,
     NODE_GET_EXPR, // obj.field
-    NODE_UNARY_EXPR
+    NODE_UNARY_EXPR,
+    NODE_AWAIT_EXPR  // await expression (MASTERPLAN: async/await)
 } NodeType;
 
 typedef struct AstNode AstNode;
@@ -116,6 +117,7 @@ typedef struct {
     int paramCount;
     Token returnType; // :: Type
     AstNode* body;
+    int isAsync;  // MASTERPLAN: async function flag
 } FunctionDecl;
 
 // Structs
@@ -145,5 +147,11 @@ typedef struct {
     AstNode main;
     AstNode* returnValue;
 } ReturnStmt;
+
+// Await expression (MASTERPLAN: async/await)
+typedef struct {
+    AstNode main;
+    AstNode* expression;  // The async expression to await
+} AwaitExpr;
 
 #endif // VANARIZE_COMPILER_AST_H
