@@ -43,3 +43,18 @@ clean:
 
 # Include Dependencies
 -include $(DEPS)
+
+# Source Listing
+source_list:
+	@mkdir -p ZListing
+	@echo "Generating source listing to ZListing/Listing.txt..."
+	@rm -f ZListing/Listing.txt
+	@for file in $$(find Source Include Examples ZDocs -type f 2>/dev/null) README.md; do \
+		echo "================================================================================" >> ZListing/Listing.txt; \
+		echo "FILE: $$file" >> ZListing/Listing.txt; \
+		echo "================================================================================" >> ZListing/Listing.txt; \
+		cat "$$file" >> ZListing/Listing.txt; \
+		echo "" >> ZListing/Listing.txt; \
+		echo "" >> ZListing/Listing.txt; \
+	done
+	@echo "Done."
