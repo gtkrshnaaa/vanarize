@@ -12,23 +12,35 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>  // For floor() in integer detection
 
 #define MAX_JIT_SIZE 4096
 
-// Simple Symbol Table for Locals
+// ==================== INTEGER SPECIALIZATION TYPE SYSTEM ====================
+
+// Internal value type tracking for integer optimization
+typedef enum {
+    TYPE_UNKNOWN,   // Type not yet determined or mixed
+    TYPE_INT64,     // Guaranteed integer (no fractional part)
+    TYPE_DOUBLE     // Floating-point value
+} ValueType;
+
 // Simple Symbol Table for Locals
 typedef struct {
     Token name;
-    Token typeName; // For static typing
-    int offset; // RBP offset (negative)
-    int reg; // -1 if stack, 0-4 for RBX, R12-R15
+    Token typeName;      // User-facing type (always "number")
+    int offset;          // RBP offset (negative)
+    int reg;             // -1 if stack, 0-4 for RBX, R12-R15
+    ValueType internalType;  // INT64 vs DOUBLE (for specialization)
 } Local;
 
 typedef struct {
     Local locals[64];
     int localCount;
     int stackSize;
-    int usedRegisters; // Count of allocated registers (0-5)
+    int usedRegisters;      // Count of allocated registers (0-5)
+    ValueType lastExprType; // Track type of last emitted expression
+    int lastResultReg;      // Track which register holds last result
 } CompilerContext;
 
 // Struct Registry
@@ -158,6 +170,45 @@ static int isGuaranteedNumber(AstNode* node, CompilerContext* ctx) {
     return 0;
 }
 
+// Helper to check if node is guaranteed to be an INTEGER (no fractional part)
+static int isGuaranteedInteger(AstNode* node, CompilerContext* ctx) {
+    if (node->type == NODE_LITERAL_EXPR) {
+        LiteralExpr* lit = (LiteralExpr*)node;
+        
+        // Check if identifier references INT64 variable
+        if (lit->token.type == TOKEN_IDENTIFIER) {
+            for (int i = ctx->localCount - 1; i >= 0; i--) {
+                Token* localName = &ctx->locals[i].name;
+                if (localName->length == lit->token.length &&
+                    memcmp(localName->start, lit->token.start, lit->token.length) == 0) {
+                    return ctx->locals[i].internalType == TYPE_INT64;
+                }
+            }
+            return 0;
+        }
+        
+        // Check if numeric literal is whole number
+        if (lit->token.type == TOKEN_NUMBER) {
+            char buffer[64];
+            int len = lit->token.length < 63 ? lit->token.length : 63;
+            for (int i = 0; i < len; i++) buffer[i] = lit->token.start[i];
+            buffer[len] = '\\0';
+            
+            double val = strtod(buffer, NULL);
+            // Check if value is whole and within int64 range
+            return (floor(val) == val && val >= (double)INT64_MIN && val <= (double)INT64_MAX);
+        }
+    }
+    
+    // Binary expressions: both operands must be int64
+    if (node->type == NODE_BINARY_EXPR) {
+        BinaryExpr* bin = (BinaryExpr*)node;
+        return isGuaranteedInteger(bin->left, ctx) && isGuaranteedInteger(bin->right, ctx);
+    }
+    
+    return 0;
+}
+
 static void emitRegisterMove(Assembler* as, int regIndex, int srcReg) {
     // Move srcReg (usually RAX) to Dest Reg (RBX, R12-R15)
     // Reg Map: 0:RBX, 1:R12, 2:R13, 3:R14, 4:R15
@@ -196,27 +247,67 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
         case NODE_VAR_DECL: {
             VarDecl* decl = (VarDecl*)node;
             
-            // Compile Init Value -> RAX
-            if (decl->initializer) {
-                emitNode(as, decl->initializer, ctx);
-            } else {
-                Asm_Mov_Imm64(as, RAX, VAL_NULL);
-            }
+           // ==================== INTEGER SPECIALIZATION: VAR DECL ====================
             
-            // Add to Locals
+            // Add to Locals first (so we can detect type)
             Local* local = &ctx->locals[ctx->localCount++];
             local->name = decl->name;
             local->typeName = decl->typeName;
             local->reg = -1; // Default to stack
-
-            // Optimization: If number, try alloc register
+            local->internalType = TYPE_UNKNOWN;  // Will be determined below
+            
+            // Compile Init Value -> RAX
+            if (decl->initializer) {
+                // Check if initializer is an integer literal
+                if (decl->initializer->type == NODE_LITERAL_EXPR) {
+                    LiteralExpr* lit = (LiteralExpr*)decl->initializer;
+                    if (lit->token.type == TOKEN_NUMBER) {
+                        char buffer[64];
+                        int len = lit->token.length < 63 ? lit->token.length : 63;
+                        for (int i = 0; i < len; i++) buffer[i] = lit->token.start[i];
+                        buffer[len] = '\\0';
+                        
+                        double value = strtod(buffer, NULL);
+                        
+                        // INTEGER FAST-PATH: Whole number within int64 range
+                        if (floor(value) == value && value >= (double)INT64_MIN && value <= (double)INT64_MAX) {
+                            local->internalType = TYPE_INT64;
+                            int64_t intVal = (int64_t)value;
+                            
+                            // Store as raw int64 (NOT NaN-boxed!)
+                            Asm_Mov_Imm64(as, RAX, (uint64_t)intVal);
+                            ctx->lastExprType = TYPE_INT64;
+                        } else {
+                            // DOUBLE PATH: Has fractional part or out of range
+                            local->internalType = TYPE_DOUBLE;
+                            Value val = NumberToValue(value);
+                            Asm_Mov_Imm64(as, RAX, val);
+                            ctx->lastExprType = TYPE_DOUBLE;
+                        }
+                    } else {
+                        // Non-number literal (string, bool, etc.)
+                        emitNode(as, decl->initializer, ctx);
+                        local->internalType = TYPE_UNKNOWN;
+                    }
+                } else {
+                    // Complex expression - emit and infer type
+                    emitNode(as, decl->initializer, ctx);
+                    local->internalType = ctx->lastExprType;
+                }
+            } else {
+                Asm_Mov_Imm64(as, RAX, VAL_NULL);
+                local->internalType = TYPE_UNKNOWN;
+            }
+            
+            // Optimization: If number type, try allocate register
             if (decl->typeName.length == 6 && memcmp(decl->typeName.start, "number", 6) == 0) {
                  int reg = allocRegister(ctx);
                  if (reg != -1) {
                      local->reg = reg;
                      // Move RAX to Reg
                      emitRegisterMove(as, reg, RAX);
-                     // Set offset to 0 as it's not on stack (or keep it purely virtual)
+                    ctx->lastResultReg = reg;
+                     // Set offset to 0 as it's not on stack
                      local->offset = 0; 
                      break; 
                  }
