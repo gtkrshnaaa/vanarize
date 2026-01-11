@@ -1,0 +1,46 @@
+struct Vector3 {
+    double x
+    double y
+    double z
+    byte r
+    byte g
+    byte b
+}
+
+function PrintVec(Vector3 v) {
+    // v.x = 12345;
+    print("Vec: " + v.x + ", " + v.y + ", " + v.z);
+}
+
+function TestMixed(int a, double b, int c) {
+    print("Mixed: " + a + ", " + b + ", " + c);
+}
+
+function Main() {
+    print("Start");
+    Vector3 v = { x: 1.0, y: 2.0, z: 3.0, r: 10, g: 20, b: 30 };
+    print("Init Done");
+    // PrintVec(v);
+    // TestMixed(10, 20.5, 30);
+    
+    int N = 1000000;
+    double start = StdTime.Now();
+    
+    for (int i = 0; i < N; i = i + 1) {
+        Vector3 temp = {
+            x: 1.0, y: 2.0, z: 3.0,
+            r: 255, g: 0, b: 0
+        };
+        double s = temp.x + temp.y;
+    }
+    
+    double end = StdTime.Now();
+    print("Allocated " + N + " structs in " + (end - start) + " ms");
+    
+    Vector3 check = { x: 10.5, y: 20.5, z: 30.5, r: 10, g: 20, b: 30 };
+    check.r = 100;
+    check.g = 200;
+    
+    print("R: " + check.r);
+    print("G: " + check.g);
+}
