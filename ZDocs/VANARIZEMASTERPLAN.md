@@ -1,25 +1,25 @@
-# THE VANARIZE SPECIFICATION
+# THE VANARIZE MASTERPLAN
 
 **Codename:** Project V
-**Target Architecture:** x86-64
+**Target Architecture:** x86-64 (AMD64)
 **Performance Objective:** 1.2 Billion Operations/Second (Throughput)
-**Implementation Standard:** ISO C (C99/C11) Native — No External Dependencies.
+**Implementation Standard:** ISO C (C99/C11) Native — Zero Dependency Imperative.
 
 ---
 
 ## 1. Abstract & Core Philosophy
 
-Vanarize is designed as a high-performance, statically-typed, procedural language that utilizes a **Direct-to-Machine-Code JIT (Just-In-Time)** compilation strategy. Unlike traditional interpreters or bytecode VMs, Vanarize eliminates the "fetch-decode-execute" loop overhead by emitting executable machine instructions into memory immediately upon parsing.
+Vanarize constitutes a paradigm shift in high-performance computing, architected as a statically-typed, procedural language that leverages a **Direct-to-Machine-Code JIT (Just-In-Time)** compilation strategy. Diverging from traditional bytecode virtual machines or tree-walking interpreters, Vanarize eliminates the "fetch-decode-execute" dispatch overhead by emitting optimized x86-64 machine instructions directly into executable memory during the parsing phase.
 
-The development of Vanarize adheres to the **"Zero-Dependency Imperative."** The compiler must be self-contained, relying solely on the host operating system's system calls (syscalls) and the standard C library.
+The architecture is governed by the **"Zero-Dependency Imperative,"** necessitating a self-contained compiler infrastructure that relies exclusively on the host operating system's system calls (syscalls) and the standard C library, ensuring maximum portability and minimal footprint.
 
 ### 1.1 The Fundamental Axioms
 
-1. **Direct Execution Paradigm:** Source code  AST  x64 Machine Code. No intermediate bytecode representation is permitted.
-2. **Type Rigidity:** Types are resolved at compile-time. All standard primitives and `string` are evaluated strictly.
-3. **Syntactic Purity:** The usage of the underscore character (`_`) is strictly prohibited in all identifiers to enforce readability.
-4. **Implicit Modularity:** The file system hierarchy defines the namespace structure.
-5. **Native Asynchrony:** Concurrency is handled via a native Event Loop (epoll/kqueue) integrated with the JIT runtime.
+1. **Direct Execution Paradigm:** The compilation pipeline operates as a strictly linear transformation: *Source Code*  *Abstract Syntax Tree (AST)*  *x64 Machine Code*. Intermediate representations (bytecode) are strictly prohibited to minimize latency.
+2. **Type Rigidity:** Type resolution is deterministic at compile-time. All primitives and complex structures must be explicitly typed, eliminating runtime type inference and enabling the generation of branch-free arithmetic logic.
+3. **Syntactic Purity:** Identifier nomenclature is strictly enforced to maximize code maintainability. The underscore character (`_`) is prohibited; identifiers must adhere to **PascalCase** (types/functions) or **camelCase** (variables).
+4. **Implicit Modularity:** The namespace hierarchy is intrinsically mapped to the physical file system structure, enforcing a logical organization of code units.
+5. **Native Asynchrony:** Concurrency is architected around a non-blocking Event Loop utilizing OS-native notification mechanisms (`epoll` on Linux, `kqueue` on BSD/macOS), managed natively via `async` and `await` keywords without thread-blocking overhead.
 
 ---
 
@@ -27,57 +27,59 @@ The development of Vanarize adheres to the **"Zero-Dependency Imperative."** The
 
 ### 2.1 The Unified 64-bit Value (NaN Boxing)
 
-To maximize CPU register utilization, Vanarize employs **NaN Boxing** (IEEE 754). All variables, regardless of type, are passed as a 64-bit unsigned integer (`uint64_t`).
+To optimize data locality and register utilization, Vanarize employs **NaN Boxing** (IEEE 754) for polymorphic storage in the heap (e.g., within Structs or Arrays). All values are encapsulated within a 64-bit unsigned integer (`uint64_t`).
 
-* **Floating Point (`double`, `float`):** Conform to IEEE 754 standard.
-* **Pointers (`string`, `struct`):** Stored within the 48-bit significand of a Signaling NaN.
-* **Booleans & Null:** Encoded using specific bit-patterns within the high 16 bits (Tagging).
+* **Floating Point (`double`, `float`):** Conform strictly to the IEEE 754 standard.
+* **Pointers (`string`, `struct`):** Encoded within the 48-bit significand of a Signaling NaN.
+* **Booleans & Null:** Encoded using specific bit-mask patterns within the high 16 bits (Tagging).
+
+> **Critical Performance Note:** While NaN Boxing is used for storage, the JIT compiler must perform **Register Promotion**. When integers (`int`, `long`) are loaded into CPU registers for computation, they must be "unboxed" into raw 64-bit integers to utilize single-cycle ALU instructions (`ADD`, `SUB`, `CMP`), bypassing floating-point units.
 
 ### 2.2 Memory Management & Garbage Collection
 
-Vanarize utilizes a **Precise, Stop-the-World, Mark-and-Sweep Garbage Collector**.
+Vanarize implements a high-throughput **Precise, Stop-the-World, Mark-and-Sweep Garbage Collector**.
 
 * **Allocation Strategy:**
-* **The Nursery (Young Gen):** A contiguous block of memory using a **Bump-Pointer Allocator**. Allocation is reduced to a single pointer increment instruction ( complexity).
-* **The Old Generation:** When the Nursery fills, live objects are promoted to a Free-List based allocator.
+* **The Nursery (Young Gen):** Utilizes a **Bump-Pointer Allocator** for rapid object creation ( complexity).
+* **The Old Generation:** Objects surviving multiple collection cycles are promoted to a Free-List allocator.
 
 
-* **Write Barriers:** The JIT emits write barriers to track pointers moving from Old Generation to Young Generation.
+* **Write Barriers:** The JIT emits inline write barriers to maintain heap integrity by tracking references migrating from the Old Generation to the Young Generation.
 
 ---
 
 ## 3. Compilation Pipeline
 
-The compiler operates in a single linear pass to ensure millisecond-level startup times.
+The compiler operates as a monolithic, single-pass engine designed for millisecond-level startup latency.
 
 ### 3.1 Lexical Analysis (Zero-Copy)
 
-The Lexer performs zero-copy tokenization. It generates a stream of `Token` structures containing pointers to the original source buffer, avoiding dynamic memory allocation (`malloc`) for string literals during this phase.
+The Lexer executes a zero-copy tokenization process. It produces a stream of `Token` structures that reference the original source buffer pointers, thereby eliminating dynamic memory allocation (`malloc`) overhead for string literals during the analysis phase.
 
 ### 3.2 Abstract Syntax Tree (AST) Construction
 
-The Parser utilizes a **Recursive Descent** algorithm. It enforces:
+The Parser utilizes a **Recursive Descent** algorithm with strict syntactic enforcement:
 
-* **PascalCase** for `Function`, `Struct`, and `Namespace` nodes.
-* **camelCase** for `Variable` nodes.
-* **Underscore Rejection:** Immediate syntax error upon detection of `_`.
+* **PascalCase:** Mandatory for `Function`, `Struct`, and `Namespace` identifiers.
+* **camelCase:** Mandatory for `Variable` identifiers.
+* **Underscore Rejection:** Immediate compilation failure upon detection of `_`.
 
 ### 3.3 The JIT Engine (Code Generation)
 
-The core of Vanarize. It translates AST nodes directly into x64 opcodes.
+This component is the core of the Vanarize runtime, translating AST nodes directly into optimized x86-64 opcodes.
 
 1. **Register Allocation (Linear Scan):**
-* The compiler maps variables to physical CPU registers (`RAX`, `RBX`, `RCX`, `RDI`, `RSI`, `R8`-`R15`).
-* **Spilling:** If registers are exhausted, values are spilled to the native stack (`RSP`).
+* **Type Segregation:** Integer types (`int`, `long`, `boolean`) are mapped exclusively to General Purpose Registers (`RAX`, `RBX`, `RDI`, etc.). Floating-point types (`double`, `float`) are mapped to XMM registers (`XMM0`-`XMM15`).
+* **Spilling:** Register pressure is managed by spilling excess variables to the native stack (`RSP`) only when physically necessary.
 
 
 2. **Binary Emission:**
-* Machine code is written to a memory buffer.
-* **Memory Protection:** The buffer is marked executable via `mmap` (Linux/Unix) with flags `PROT_READ | PROT_WRITE | PROT_EXEC`.
+* Machine code is written to a contiguous memory block.
+* **Memory Protection:** The block is finalized via `mmap` with `PROT_READ | PROT_WRITE | PROT_EXEC` permissions.
 
 
 3. **Native ABI Compliance:**
-* Vanarize follows the **System V AMD64 ABI** calling convention, allowing seamless invocation of internal C functions (`StdLib`).
+* Adherence to the **System V AMD64 ABI** ensures seamless interoperability with the host C standard library (`libc`).
 
 
 
@@ -87,46 +89,44 @@ The core of Vanarize. It translates AST nodes directly into x64 opcodes.
 
 ### 4.1 Primitive Types
 
-Vanarize strictly implements standard primitive types for maximum compatibility and predictable performance.
+Vanarize enforces a strict, statically-typed system. Implicit casting is prohibited to ensure arithmetic precision and performance predictability.
 
-| Type | Bit-width | Description | Internal Representation |
+| Type | Bit-width | Description | Hardware Mapping |
 | --- | --- | --- | --- |
-| **`byte`** | 8 | Signed integer | 8-bit Two's Complement |
-| **`short`** | 16 | Signed integer | 16-bit Two's Complement |
-| **`int`** | 32 | Signed integer | 32-bit Two's Complement |
-| **`long`** | 64 | Signed integer | 64-bit Two's Complement |
-| **`float`** | 32 | Single-precision float | IEEE 754 |
-| **`double`** | 64 | Double-precision float | IEEE 754 |
-| **`char`** | 16 | Unicode character | 16-bit UTF-16 |
-| **`boolean`** | 1 | Logical truth | 1-byte Effective |
-| **`string`** | N/A | Immutable String | Pointer to Heap-allocated UTF-8 |
-
-> [!IMPORTANT]
-> **Strict Type System**: Implicit narrowing conversions (e.g., `long` to `int`) are prohibited. Widening conversions follow standard promotion rules. Arithmetic between mixed types (e.g., `int` + `double`) results in the most precise type (`double`), matching predictable behavior.
+| **`byte`** | 8 | Signed integer | GPR (AL/BL) |
+| **`short`** | 16 | Signed integer | GPR (AX/BX) |
+| **`int`** | 32 | Signed integer | GPR (EAX/EBX) |
+| **`long`** | 64 | Signed integer | GPR (RAX/RBX) |
+| **`float`** | 32 | Single-precision float | XMM (IEEE 754) |
+| **`double`** | 64 | Double-precision float | XMM (IEEE 754) |
+| **`char`** | 16 | Unicode character | GPR (AX) |
+| **`boolean`** | 1 | Logical truth | GPR (AL) |
+| **`string`** | 64 | Immutable String | GPR (Pointer) |
 
 ### 4.2 Syntax Rules
 
-#### A. Variable Declaration & String Concatenation
+#### A. Variable Declaration & Type Safety
 
-String concatenation uses the `+` operator. Supporting types are converted to `string` implicitly during concatenation.
+Variables must be declared with explicit primitive types to enable JIT optimization.
 
 ```vana
-// Variable: camelCase
+// Correct: Explicit Typing
 int coreCount = 8
 double clockSpeed = 3.5
 string cpuName = "Intel Core i5-1153G7"
 boolean isEnabled = true
 
 // Concatenation
-string status = "CPU: " + cpuName + " has " + coreCount + " cores at " + clockSpeed + "GHz."
+string status = "CPU: " + cpuName + " Speed: " + clockSpeed
+
 ```
 
 #### B. Data Structures (`struct`)
 
-Classes are rejected in favor of POD (Plain Old Data) Structs.
+Classes are rejected in favor of high-performance POD (Plain Old Data) Structs. Structs represent contiguous memory blocks.
 
 ```vana
-// Struct: PascalCase
+// Struct: PascalCase required
 struct NetworkConfig {
     string hostAddress
     int portId
@@ -137,16 +137,18 @@ struct NetworkConfig {
 
 #### C. Control Structures
 
-Loops adhere strictly to the C-style iteration paradigm.
+To guarantee predictable execution paths and facilitate loop unrolling optimizations, the `while` loop is **explicitly removed**. Iteration is exclusively governed by the canonical C-style `for` loop.
 
 ```vana
-// Iteration
+// Canonical For-Loop (Strict C-Style)
 for (int i = 0; i < 1000; i++) {
     // Logic here
 }
 
 // Conditional Branching
 if (i > 500) {
+    // Logic here
+} else if (i == 500) {
     // Logic here
 } else {
     // Logic here
@@ -156,7 +158,7 @@ if (i > 500) {
 
 #### D. Functions
 
-Declared with `function`, PascalCase naming, and `::` return type syntax.
+Functions require explicit type signatures using `::` for return types. PascalCase naming is mandatory.
 
 ```vana
 // Function Definition
@@ -164,7 +166,7 @@ function CalculateVector(double x, double y) :: double {
     return x * y
 }
 
-// Void Function
+// Void Function (No return type)
 function PrintStatus(string msg) {
     print(msg)
 }
@@ -173,10 +175,10 @@ function PrintStatus(string msg) {
 
 #### E. Modularity (Imports)
 
-Imports are relative. The filename becomes the Namespace identifier.
+The module system uses relative file paths resolved at compile-time. The filename acts as the Namespace identifier.
 
 ```vana
-// Imports "Libs/MathUtils.vana" as namespace "MathUtils"
+// Imports "Libs/MathUtils.vana" -> Namespace "MathUtils"
 import "./Libs/MathUtils.vana"
 
 function Main() {
@@ -189,32 +191,30 @@ function Main() {
 
 ## 5. Standard Library Specification
 
-These libraries are implemented in C and exposed as intrinsic namespaces.
-No need to import them. Become available automatically. By design. By default.
+These libraries are implemented as compiler intrinsics, mapping directly to optimized C functions or assembly instructions.
 
 ### 5.1 `StdMath`
 
-Provides direct mappings to CPU AVX/SSE instructions.
+Maps directly to CPU AVX/SSE instructions (`ADDSD`, `SQRTSD`, etc.).
 
 * **Functions:** `Sin`, `Cos`, `Tan`, `Sqrt`, `Pow`, `Abs`, `Floor`, `Ceil`.
 
 ### 5.2 `StdTime`
 
-Provides high-resolution monotonic timing.
+Provides high-resolution monotonic timing via `clock_gettime`.
 
-* **Implementation:** `clock_gettime(CLOCK_MONOTONIC)`.
-* **Functions:** `Now()` (nanoseconds), `Sleep(ms)`, `Measure()`.
+* **Functions:** `Now()` (returns `long` nanoseconds), `Sleep(int ms)`, `Measure()`.
 
 ### 5.3 `StdNetwork`
 
-Implements non-blocking I/O using BSD Sockets.
+Implements an event-driven I/O subsystem.
 
-* **Architecture:** Event-driven using `epoll` (Linux) or `kqueue` (macOS).
-* **Functions:** `Listen`, `Accept`, `Get` (HTTP), `Post` (HTTP).
+* **Architecture:** Non-blocking sockets managed by `epoll`/`kqueue`.
+* **Functions:** `Listen`, `Accept`, `Get`, `Post`.
 
 ### 5.4 `StdJson`
 
-A finite-state-machine (FSM) based JSON parser optimized for zero-copy read operations.
+A zero-copy JSON parser utilizing finite-state automata (FSA).
 
 * **Functions:** `Parse`, `Stringify`, `GetValue`.
 
@@ -222,7 +222,7 @@ A finite-state-machine (FSM) based JSON parser optimized for zero-copy read oper
 
 ## 6. Implementation Strategy (Directory Structure)
 
-The project structure is strictly modular, enforcing a separation of Interface (`Include`) and Implementation (`Source`).
+The project adheres to a strict modular architecture separating Interface (`Include`) from Implementation (`Source`).
 
 **Root: `/VanarizeProject**`
 
@@ -234,7 +234,7 @@ VanarizeProject/
 │   ├── Core/                
 │   │   ├── Memory.h         # Allocator & mmap Prototypes
 │   │   ├── GarbageCollector.h
-│   │   └── VanarizeValue.h    # NaN Boxing Definitions
+│   │   └── VanarizeValue.h  # NaN Boxing Definitions
 │   ├── Compiler/            
 │   │   ├── Token.h
 │   │   ├── Lexer.h
@@ -242,7 +242,7 @@ VanarizeProject/
 │   ├── Jit/                 # JIT CORE HEADERS
 │   │   ├── CodeGen.h        
 │   │   ├── AssemblerX64.h   # Opcode Definitions
-│   │   └── RegisterMap.h    
+│   │   └── RegisterMap.h    # Linear Scan Allocator
 │   └── StdLib/              # STANDARD LIB HEADERS
 │       ├── StdMath.h
 │       ├── StdTime.h
@@ -261,7 +261,7 @@ VanarizeProject/
 │   ├── Jit/
 │   │   ├── CodeGen.c        # AST -> Assembly Translation
 │   │   ├── AssemblerX64.c   # Hex Emitter (The "Metal" Layer)
-│   │   ├── RegisterMap.c    # Linear Scan Allocator
+│   │   ├── RegisterMap.c    # Register Allocation Logic
 │   │   └── ExecutableMemory.c
 │   └── StdLib/
 │       ├── StdMath.c
@@ -283,12 +283,11 @@ VanarizeProject/
 
 ## Appendix A: Reference Implementation
 
-The following code demonstrates the syntactical strictness and capabilities of Vanarize.
+The following code demonstrates the syntactic strictness, explicit typing, and async capabilities of Vanarize. Note the exclusive use of `for` loops and C-style control flow.
 
 **File:** `Main.vana`
 
 ```vana
-
 // Struct Definition (PascalCase)
 struct SensorData {
     string deviceId
@@ -309,21 +308,21 @@ async function UploadData(SensorData data) :: boolean {
     // JSON Serialization (Native)
     string payload = StdJson.Stringify(data)
     
-    // Network Request (Native Async)
-    // Simulating a POST request
+    // Network Request (Native Async via Event Loop)
     string response = await StdNetwork.Post("https://api.vanarize.io/telemetry", payload)
     
     if (response == "200 OK") {
         return true
+    } else {
+        return false
     }
-    return false
 }
 
 // Application Entry Point
 async function Main() {
     print("Vanarize System Initializing...")
     
-    // Variable Declaration (camelCase)
+    // Explicit Variable Declaration (No 'var')
     int maxRetries = 3
     
     SensorData mainSensor = {
@@ -332,12 +331,12 @@ async function Main() {
         isActive: true
     }
 
-    // Control Flow
+    // Control Flow (C-Style)
     if (mainSensor.isActive) {
         // Data Processing
         mainSensor.temperature = CalibrateSensor(mainSensor.temperature)
         
-        // Loop Structure (C-Style)
+        // Loop Structure (Strict C-Style 'for', NO 'while')
         for (int i = 1; i <= maxRetries; i++) {
             print("Attempt " + i + "...")
             
@@ -347,10 +346,10 @@ async function Main() {
             if (success) {
                 print("Upload Successful.")
                 // Native Time Usage
-                long latency = StdTime.Now() // Fixed example to use long for timestamp
-                print("Operation time: " + latency + "ns")
+                long latency = StdTime.Now() 
+                print("Operation timestamp: " + latency + "ns")
                 
-                // Break loop manual simulation (if break implemented) or logical exit
+                // Manual break logic via loop counter manipulation
                 i = maxRetries + 1 
             } else {
                 print("Upload Failed. Retrying...")
@@ -364,14 +363,11 @@ async function Main() {
 
 ```
 
-
 ## ARTICLE 7: RUNTIME INVOCATION PROTOCOL (CLI)
 
-The Vanarize Runtime Environment is invoked via the command-line interface. While it functions internally as a complex Just-In-Time compiler, the user experience is designed to be as frictionless as a scripting interpreter.
+The Vanarize Runtime Environment is invoked via the command-line interface.
 
 ### 7.1 Standard Execution
-
-To execute a Vanarize program, the user invokes the `vanarize` binary followed by the entry file path.
 
 **Syntax:**
 
@@ -384,31 +380,13 @@ vanarize <filename>.vana
 
 1. **Read:** The CLI loads `<filename>.vana` into memory.
 2. **Compile:** The JIT Engine translates the entire transitive closure of imports into **x64 Machine Code** in RAM.
-3. **Jump:** The CPU instruction pointer (`RIP`) is moved to the start of the `Main()` function in the generated memory block.
-4. **Terminate:** Upon completion of `Main()`, the process exits with the returned integer code.
+3. **Jump:** The CPU instruction pointer (`RIP`) is moved to the start of the `Main()` function.
+4. **Event Loop:** The runtime enters the non-blocking event loop to handle `async` tasks.
+5. **Terminate:** Upon completion of all tasks, the process exits.
 
-### 7.2 Usage Examples
+### 7.2 Debugging
 
-#### Case A: Running the Application
-
-The standard way to launch the system defined in *Appendix A*.
-
-```bash
-$ vanarize main.vana
-
-[Vanarize JIT] Compiling... (4ms)
-[Vanarize JIT] Execution started.
-Vanarize System Initializing...
-Attempt 1...
-Uploading data for: Therm-X100
-Upload Successful.
-Operation time: 4200ns
-
-```
-
-#### Case B: Debugging Generated Assembly
-
-For development and verification purposes, the compiler accepts flags to dump the generated machine code. This confirms the "Direct-to-Metal" architecture.
+To verify the JIT output and ensure strict register usage (Integers in GPR, Floats in XMM), the compiler accepts a dump flag.
 
 ```bash
 $ vanarize --dump-asm main.vana
@@ -416,25 +394,9 @@ $ vanarize --dump-asm main.vana
 [JIT DUMP] Function: CalculateVector
 0x7F...00:  55          push   rbp
 0x7F...01:  48 89 E5    mov    rbp, rsp
-0x7F...04:  F2 0F 59 C1 mulsd  xmm0, xmm1  ; Native multiplication
+0x7F...04:  F2 0F 59 C1 mulsd  xmm0, xmm1  ; Explicit Floating Point Mul
 0x7F...08:  5D          pop    rbp
 0x7F...09:  C3          ret
-...
-[Vanarize JIT] Execution started.
-
-```
-
-### 7.3 Error Reporting
-
-In the event of a syntax error or runtime exception (e.g., Type Mismatch during compilation), the CLI must output the exact file, line number, and a visual pointer to the offending token.
-
-```bash
-$ vanarize server.vana
-
-Error in 'server.vana' at line 42:
-42 |    int port = "8080"
-                      ^
-Type Mismatch: Cannot assign type 'string' to variable of type 'int'.
 
 ```
 
