@@ -1,48 +1,55 @@
 # Vanarize JIT Compiler
 
-Vanarize is an ultra-high-performance, statically-typed scripting language that compiles **Directly to x64 Machine Code** in memory. 
-
-Unlike traditional bytecode VMs (like Python or Lua's standard interpreter), Vanarize produces native CPU instructions during parsing, eliminating the "fetch-decode-execute" interpreter loop entirely.
+Vanarize is an ultra-high-performance, statically-typed scripting language that compiles directly to x86-64 machine code in memory. By producing native CPU instructions during parsing, Vanarize eliminates the overhead of intermediate representation and interpreter loops.
 
 ## Performance
-**Current Benchmark (`FastBench.vana`): ~321,000,000 Operations/Second**
+Current Peak Throughput: 832,000,000 Operations/Second (Int Benchmark)
 
-Vanarize achieves this speed through aggressive JIT optimizations implemented in `Source/Jit`:
-- **Register Promotion**: Local variables are mapped directly to CPU registers (`RBX`, `R12`-`R15`).
-- **Inline Arithmetic**: Numeric operations (e.g., `i + 1`) emit single assembly instructions (`ADDSD`), bypassing runtime function calls.
-- **blind Fast-Paths**: Static analysis (`isGuaranteedNumber`) removes runtime type checks for typed variables.
-- **Fused Compare-Branch**: Relational operators (`<`, `>`) compile to direct CPU flag jumps (`UCOMISD` + `Jcc`), skipping boolean object allocation.
+Vanarize achieves near-native performance through aggressive JIT optimizations:
+- 128x Loop Unrolling: Dramatically reduces loop control overhead for high-frequency arithmetic.
+- Register Promotion: Maps local variables directly to CPU registers (RBX, R12-R15).
+- Inline Arithmetic: Emits single assembly instructions (ADD, SUB, IMUL) for numeric operations, bypassing runtime calls.
+- Fused Compare-Branch: Compiles relational operators to direct CPU conditional jumps, skipping boolean object allocation.
+- SIMD Infrastructure: Supports 256-bit AVX instructions (VPADDD, VADDPD) for vectorized throughput.
 
-## Key Features
-- **True JIT Compilation**: No bytecode, no intermediate representation. Source -> x64 Machine Code.
-- **NaN-Boxing**: Efficient 64-bit value representation (Doubles, Pointers, Booleans packed into IEEE 754 slots).
-- **C-Style Syntax**: Familiar syntax with typed variables (`number`, `string`).
-- **Structs**: User-defined data structures with direct memory access.
-- **Garbage Collection**: Simple mark-and-sweep GC for managed memory.
-- **Native Interop**: System V AMD64 ABI compliant function calls.
+## Core Features
+- Direct Machine Code Generation: No bytecode or VM interpretation.
+- Strict Type System: Statically typed with explicit primitive widths.
+- Async/Await: Built-in support for asynchronous programming with a native event loop.
+- NaN-Boxing: Efficient 64-bit representation for all values (Doubles, Pointers, Booleans).
+- Modules: Robust import system for code organization and reusable libraries.
+- Structs: User-defined data types with direct memory mapping.
+- Native Interop: Fully compliant with the System V AMD64 ABI.
+
+## Type System
+Vanarize implements a comprehensive primitive type system:
+- Integers: byte (8), short (16), int (32), long (64).
+- Floats: float (32), double (64).
+- Text: char (16), string (managed).
+- Logic: boolean (mapped to 1/0).
 
 ## Building
-Requirements: `gcc` (x86_64 Linux).
+Requirements: GCC and an x86-64 Linux environment.
 
 ```bash
 make
 ```
 
 ## Usage
-Run any `.vana` script:
+Run any .vana script using the vanarize binary:
 
 ```bash
-./vanarize Examples/FastBench.vana
+./vanarize Examples/Benchmarks/IntBenchmark.vana
 ```
 
 ## Project Structure
-- `Source/Jit/`: The core JIT engine (`CodeGen.c`, `AssemblerX64.c`).
-- `Source/Compiler/`: Lexer and Recursive Descent Parser.
-- `Source/Core/`: Runtime, Memory Management, GC.
-- `Examples/`: Benchmark and test scripts.
+- Source/Jit/: Core JIT engine and x64 Assembler.
+- Source/Compiler/: Lexer and Recursive Descent Parser.
+- Source/Core/: Runtime engine, NaN-Boxing, and Mark-and-Sweep GC.
+- Source/StdLib/: Standard libraries (Benchmark, Time, Network, Json, Math).
+- Examples/: Test suite and benchmarks.
 
-## Latency Analysis
-The engine is currently bound by the dependency chain latency of `double` (IEEE 754) arithmetic.
-- **Loop overhead**: ~8 cycles/iteration.
-- **Throughput Limit**: ~500M ops/sec (theoretical max).
-To exceed this (reaching >1.0B ops/sec), future versions will implement Typed Integers to utilize lower-latency integer ALU instructions.
+## Future Roadmap
+- Reach and exceed 1.0B operations/second through further vectorization.
+- Support for more complex struct layouts and method dispatch.
+- Enhanced static analysis for even more aggressive fast-paths.
