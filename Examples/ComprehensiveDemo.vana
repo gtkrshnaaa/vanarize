@@ -1,0 +1,184 @@
+// =========================================================================
+// ComprehensiveDemo.vana - Vanarize Language Showcase
+// =========================================================================
+// Demonstrates core Vanarize features.
+// =========================================================================
+
+import "./Libs/MathLib.vana";
+
+// =========================================================================
+// STRUCT DEFINITIONS
+// =========================================================================
+
+struct Point {
+    double x
+    double y
+}
+
+struct User {
+    string name
+    int age
+    boolean active
+}
+
+// =========================================================================
+// FUNCTIONS WITH EXPLICIT RETURN TYPES
+// =========================================================================
+
+function Add(int a, int b) :: int {
+    return a + b;
+}
+
+function Multiply(double a, double b) :: double {
+    return a * b;
+}
+
+function IsAdult(int age) :: boolean {
+    if (age >= 18) {
+        return true;
+    }
+    return false;
+}
+
+function GetGreeting(string name) :: string {
+    return "Hello, " + name + "!";
+}
+
+// =========================================================================
+// ASYNC FUNCTIONS
+// =========================================================================
+
+async function FetchData() :: int {
+    print("Fetching data...");
+    return 42;
+}
+
+async function ProcessResult(int value) :: int {
+    print("Processing: " + value);
+    return value * 2;
+}
+
+// =========================================================================
+// MAIN ENTRY POINT
+// =========================================================================
+
+async function Main() {
+    print("==================================================");
+    print("   VANARIZE LANGUAGE DEMONSTRATION");
+    print("   JIT-Compiled to Native x86-64");
+    print("==================================================");
+    print("");
+    
+    // --- SECTION 1: Primitive Types ---
+    print(">>> PRIMITIVE TYPES <<<");
+    
+    int intValue = 42;
+    double doubleValue = 3.14159;
+    boolean boolValue = true;
+    string stringValue = "Vanarize";
+    
+    print("int: " + intValue);
+    print("double: " + doubleValue);
+    print("string: " + stringValue);
+    
+    if (boolValue) {
+        print("boolean: true");
+    }
+    print("");
+    
+    // --- SECTION 2: Functions ---
+    print(">>> FUNCTION CALLS <<<");
+    
+    int sum = Add(100, 200);
+    print("Add(100, 200) = " + sum);
+    
+    double product = Multiply(3.5, 2.0);
+    print("Multiply(3.5, 2.0) = " + product);
+    
+    boolean adult = IsAdult(25);
+    if (adult) {
+        print("IsAdult(25) = true");
+    }
+    
+    string greeting = GetGreeting("World");
+    print(greeting);
+    print("");
+    
+    // --- SECTION 3: Imported Modules ---
+    print(">>> IMPORTED MODULES <<<");
+    
+    int mathSum = MathLib.Add(50, 75);
+    print("MathLib.Add(50, 75) = " + mathSum);
+    
+    int mathDiff = MathLib.Sub(100, 30);
+    print("MathLib.Sub(100, 30) = " + mathDiff);
+    print("");
+    
+    // --- SECTION 4: Structs ---
+    print(">>> STRUCT OPERATIONS <<<");
+    
+    Point origin = {
+        x: 0.0,
+        y: 0.0
+    };
+    
+    Point target = {
+        x: 10.0,
+        y: 20.0
+    };
+    
+    print("Origin: (" + origin.x + ", " + origin.y + ")");
+    print("Target: (" + target.x + ", " + target.y + ")");
+    
+    User user1 = {
+        name: "Alice",
+        age: 30,
+        active: true
+    };
+    
+    print("User: " + user1.name + ", Age: " + user1.age);
+    print("");
+    
+    // --- SECTION 5: Control Flow ---
+    print(">>> CONTROL FLOW <<<");
+    
+    int score = 85;
+    
+    if (score >= 90) {
+        print("Grade: A");
+    } else if (score >= 80) {
+        print("Grade: B");
+    } else if (score >= 70) {
+        print("Grade: C");
+    } else {
+        print("Grade: F");
+    }
+    
+    boolean hasAccess = true;
+    boolean isAdmin = false;
+    
+    if (hasAccess) {
+        if (isAdmin) {
+            print("Access Level: ADMIN");
+        } else {
+            print("Access Level: USER");
+        }
+    }
+    print("");
+    
+    // --- SECTION 6: Async/Await ---
+    print(">>> ASYNC/AWAIT <<<");
+    
+    int data = await FetchData();
+    print("Fetched: " + data);
+    
+    int processed = await ProcessResult(data);
+    print("Processed: " + processed);
+    print("");
+    
+    // --- COMPLETE ---
+    print("==================================================");
+    print("   DEMONSTRATION COMPLETE");
+    print("   All features validated!");
+    print("==================================================");
+}

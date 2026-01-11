@@ -1,0 +1,24 @@
+// MathUtils.vana - Utility Library for Comprehensive Demo
+// Demonstrates: Module exports, Functions with return types
+
+function Square(double x) :: double {
+    return x * x;
+}
+
+function Cube(double x) :: double {
+    return x * x * x;
+}
+
+function Clamp(double value, double minVal, double maxVal) :: double {
+    if (value < minVal) {
+        return minVal;
+    }
+    if (value > maxVal) {
+        return maxVal;
+    }
+    return value;
+}
+
+function Lerp(double a, double b, double t) :: double {
+    return a + (b - a) * t;
+}
