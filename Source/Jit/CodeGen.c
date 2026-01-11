@@ -16,13 +16,18 @@
 
 #define MAX_JIT_SIZE 4096
 
-// ==================== INTEGER SPECIALIZATION TYPE SYSTEM ====================
-
-// Internal value type tracking for integer optimization
+// Internal value type tracking for JIT optimization (Java types)
 typedef enum {
-    TYPE_UNKNOWN,   // Type not yet determined or mixed
-    TYPE_INT64,     // Guaranteed integer (no fractional part)
-    TYPE_DOUBLE     // Floating-point value
+    TYPE_UNKNOWN,
+    TYPE_BYTE,
+    TYPE_SHORT,
+    TYPE_INT,
+    TYPE_LONG,
+    TYPE_FLOAT,
+    TYPE_DOUBLE,
+    TYPE_CHAR,
+    TYPE_BOOLEAN,
+    TYPE_STRING
 } ValueType;
 
 // Simple Symbol Table for Locals
@@ -171,7 +176,8 @@ static int isGuaranteedNumber(AstNode* node, CompilerContext* ctx) {
 }
 
 // Helper to check if node is guaranteed to be an INTEGER (no fractional part)
-static int isGuaranteedInteger(AstNode* node, CompilerContext* ctx) {
+// NOTE: Will be used in Phase 3+ for safe integer specialization
+static int __attribute__((unused)) isGuaranteedInteger(AstNode* node, CompilerContext* ctx) {
     if (node->type == NODE_LITERAL_EXPR) {
         LiteralExpr* lit = (LiteralExpr*)node;
         
@@ -242,55 +248,41 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             break;
         }
         
-
-
         case NODE_VAR_DECL: {
             VarDecl* decl = (VarDecl*)node;
             
-           // ==================== INTEGER SPECIALIZATION: VAR DECL ====================
+            // ==================== PHASE 0: UNIFIED VALUE STORAGE ====================
+            // All numbers stored as NaN-boxed doubles for consistency
             
             // Add to Locals first (so we can detect type)
             Local* local = &ctx->locals[ctx->localCount++];
             local->name = decl->name;
             local->typeName = decl->typeName;
             local->reg = -1; // Default to stack
-            local->internalType = TYPE_UNKNOWN;  // Will be determined below
+            local->internalType = TYPE_DOUBLE; // All numbers are doubles
             
             // Compile Init Value -> RAX
             if (decl->initializer) {
-                // Check if initializer is an integer literal
                 if (decl->initializer->type == NODE_LITERAL_EXPR) {
                     LiteralExpr* lit = (LiteralExpr*)decl->initializer;
                     if (lit->token.type == TOKEN_NUMBER) {
+                        // Parse number and store as NaN-boxed double
                         char buffer[64];
                         int len = lit->token.length < 63 ? lit->token.length : 63;
                         for (int i = 0; i < len; i++) buffer[i] = lit->token.start[i];
                         buffer[len] = '\0';
                         
                         double value = strtod(buffer, NULL);
-                        
-                        // INTEGER FAST-PATH: Whole number within int64 range
-                        if (floor(value) == value && value >= (double)INT64_MIN && value <= (double)INT64_MAX) {
-                            local->internalType = TYPE_INT64;
-                            int64_t intVal = (int64_t)value;
-                            
-                            // Store as raw int64 (NOT NaN-boxed!)
-                            Asm_Mov_Imm64(as, RAX, (uint64_t)intVal);
-                            ctx->lastExprType = TYPE_INT64;
-                        } else {
-                            // DOUBLE PATH: Has fractional part or out of range
-                            local->internalType = TYPE_DOUBLE;
-                            Value val = NumberToValue(value);
-                            Asm_Mov_Imm64(as, RAX, val);
-                            ctx->lastExprType = TYPE_DOUBLE;
-                        }
+                        Value val = NumberToValue(value);
+                        Asm_Mov_Imm64(as, RAX, val);
+                        ctx->lastExprType = TYPE_DOUBLE;
                     } else {
                         // Non-number literal (string, bool, etc.)
                         emitNode(as, decl->initializer, ctx);
                         local->internalType = TYPE_UNKNOWN;
                     }
                 } else {
-                    // Complex expression - emit and infer type
+                    // Complex expression - emit normally
                     emitNode(as, decl->initializer, ctx);
                     local->internalType = ctx->lastExprType;
                 }
@@ -842,104 +834,73 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
         case NODE_BINARY_EXPR: {
             BinaryExpr* bin = (BinaryExpr*)node;
             
-            // ==================== INTEGER SPECIALIZATION: BINARY EXPRESSIONS ====================
+            // ==================== PHASE 0: UNIFIED DOUBLE ARITHMETIC ====================
+            // All arithmetic uses NaN-boxed doubles for maximum stability.
+            // Performance optimizations will be added in later phases.
             
-            // Check if both operands are guaranteed integers (for arithmetic ops)
-            if (bin->op.type == TOKEN_PLUS || bin->op.type == TOKEN_MINUS || bin->op.type == TOKEN_STAR) {
-                if (isGuaranteedInteger(bin->left, ctx) && isGuaranteedInteger(bin->right, ctx)) {
-                    // INTEGER FAST-PATH with LITERAL INTERCEPTION
-                    // Uses fast ALU operations, then converts result back to NaN-boxed double
+            // Handle arithmetic operators: +, -, *, /
+            if (bin->op.type == TOKEN_PLUS || bin->op.type == TOKEN_MINUS || 
+                bin->op.type == TOKEN_STAR || bin->op.type == TOKEN_SLASH) {
+                
+                // Check if this is guaranteed to be number arithmetic (not string concat)
+                int isNumericAdd = (bin->op.type != TOKEN_PLUS) || 
+                                   (isGuaranteedNumber(bin->left, ctx) && isGuaranteedNumber(bin->right, ctx));
+                
+                if (isNumericAdd) {
+                    // UNIFIED DOUBLE PATH: All values as NaN-boxed doubles
                     
-                    // === EMIT LEFT OPERAND -> RAX (as raw int64) ===
-                    if (bin->left->type == NODE_LITERAL_EXPR) {
-                        LiteralExpr* leftLit = (LiteralExpr*)bin->left;
-                        if (leftLit->token.type == TOKEN_NUMBER) {
-                            // LITERAL INTERCEPTION: Parse directly to int64
-                            char buffer[64];
-                            int len = leftLit->token.length < 63 ? leftLit->token.length : 63;
-                            for (int i = 0; i < len; i++) buffer[i] = leftLit->token.start[i];
-                            buffer[len] = '\0';
-                            int64_t rawValue = (int64_t)strtod(buffer, NULL);
-                            Asm_Mov_Imm64(as, RAX, (uint64_t)rawValue);
-                        } else {
-                            // Identifier - emitNode loads NaN-boxed value to RAX
-                            // We need to extract integer from it
-                            emitNode(as, bin->left, ctx);
-                            // Convert NaN-boxed double to int64: CVTTSD2SI R10, XMM0
-                            // First move RAX to XMM0: MOVQ XMM0, RAX
-                            Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); 
-                            Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
-                            // CVTTSD2SI RAX, XMM0: F2 48 0F 2C C0
-                            Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
-                            Asm_Emit8(as, 0x2C); Asm_Emit8(as, 0xC0); // CVTTSD2SI RAX, XMM0
-                        }
-                    } else {
-                        emitNode(as, bin->left, ctx);
-                        // Convert NaN-boxed double to int64
-                        Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); 
-                        Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
-                        Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
-                        Asm_Emit8(as, 0x2C); Asm_Emit8(as, 0xC0); // CVTTSD2SI RAX, XMM0
-                    }
+                    // 1. Emit left operand -> RAX
+                    emitNode(as, bin->left, ctx);
                     
-                    // Save left (raw int64) to R10
+                    // 2. Save left to R10 (temp register)
                     Asm_Mov_Reg_Reg(as, R10, RAX);
                     
-                    // === EMIT RIGHT OPERAND -> RAX (as raw int64) ===
-                    if (bin->right->type == NODE_LITERAL_EXPR) {
-                        LiteralExpr* rightLit = (LiteralExpr*)bin->right;
-                        if (rightLit->token.type == TOKEN_NUMBER) {
-                            // LITERAL INTERCEPTION: Parse directly to int64
-                            char buffer[64];
-                            int len = rightLit->token.length < 63 ? rightLit->token.length : 63;
-                            for (int i = 0; i < len; i++) buffer[i] = rightLit->token.start[i];
-                            buffer[len] = '\0';
-                            int64_t rawValue = (int64_t)strtod(buffer, NULL);
-                            Asm_Mov_Imm64(as, RAX, (uint64_t)rawValue);
-                        } else {
-                            // Identifier - load and convert
-                            emitNode(as, bin->right, ctx);
-                            Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); 
-                            Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
-                            Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
-                            Asm_Emit8(as, 0x2C); Asm_Emit8(as, 0xC0); // CVTTSD2SI RAX, XMM0
-                        }
-                    } else {
-                        emitNode(as, bin->right, ctx);
-                        Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); 
-                        Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
-                        Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
-                        Asm_Emit8(as, 0x2C); Asm_Emit8(as, 0xC0); // CVTTSD2SI RAX, XMM0
-                    }
+                    // 3. Emit right operand -> RAX
+                    emitNode(as, bin->right, ctx);
                     
-                    // Now: R10 = left (int64), RAX = right (int64)
-                    // Perform integer operation: R10 = R10 <op> RAX
+                    // Now: R10 = left (NaN-boxed), RAX = right (NaN-boxed)
+                    
+                    // 4. Move right to XMM1: MOVQ XMM1, RAX
+                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
+                    Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8); // MOVQ XMM1, RAX
+                    
+                    // 5. Move left to XMM0: MOVQ XMM0, R10 (REX.B for R10)
+                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F);
+                    Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC2); // MOVQ XMM0, R10
+                    
+                    // 6. Perform double operation
                     switch (bin->op.type) {
                         case TOKEN_PLUS:
-                            Asm_Add_Reg_Reg(as, R10, RAX);
+                            // ADDSD XMM0, XMM1: F2 0F 58 C1
+                            Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
+                            Asm_Emit8(as, 0x58); Asm_Emit8(as, 0xC1);
                             break;
                         case TOKEN_MINUS:
-                            Asm_Sub_Reg_Reg_64(as, R10, RAX);
+                            // SUBSD XMM0, XMM1: F2 0F 5C C1
+                            Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
+                            Asm_Emit8(as, 0x5C); Asm_Emit8(as, 0xC1);
                             break;
                         case TOKEN_STAR:
-                            Asm_Imul_Reg_Reg_64(as, R10, RAX);
+                            // MULSD XMM0, XMM1: F2 0F 59 C1
+                            Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
+                            Asm_Emit8(as, 0x59); Asm_Emit8(as, 0xC1);
+                            break;
+                        case TOKEN_SLASH:
+                            // DIVSD XMM0, XMM1: F2 0F 5E C1
+                            Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
+                            Asm_Emit8(as, 0x5E); Asm_Emit8(as, 0xC1);
                             break;
                         default:
                             break;
                     }
                     
-                    // Convert result from int64 back to NaN-boxed double
-                    // CVTSI2SD XMM0, R10: F2 49 0F 2A C2 (R10 = 10, needs REX.B)
-                    Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC2); // CVTSI2SD XMM0, R10
-                    
-                    // MOVQ RAX, XMM0: 66 48 0F 7E C0
+                    // 7. Move result back to RAX: MOVQ RAX, XMM0
                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
                     Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
                     
-                    // State update - result is now NaN-boxed double in RAX
-                    ctx->lastExprType = TYPE_DOUBLE; // Store as double for consistency
-                    ctx->lastResultReg = -1; // Result in RAX
+                    // State update
+                    ctx->lastExprType = TYPE_DOUBLE;
+                    ctx->lastResultReg = -1;
                     
                     break; // Exit NODE_BINARY_EXPR
                 }
