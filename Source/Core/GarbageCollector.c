@@ -164,14 +164,6 @@ static void sweep(void) {
 }
 
 void GC_Collect(void) {
-    if (rootCount == 0 && stackBottom == NULL) return; // Optimization/Safety
-    
-    // printf("GC: Starting Collection. Roots: %d\n", rootCount);
-    // fflush(stdout);
-    
     markRoots();
     sweep();
-    
-    // printf("GC: Finished Collection.\n");
-    // fflush(stdout);
 }
