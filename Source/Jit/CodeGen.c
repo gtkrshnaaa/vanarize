@@ -593,12 +593,22 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
         case NODE_ASSIGNMENT_EXPR: {
             AssignmentExpr* assign = (AssignmentExpr*)node;
             emitNode(as, assign->value, ctx);
-            // Value in RAX
+            // Value in RAX, remember its type
+            ValueType assignedType = ctx->lastExprType;
             
             Token type;
             int reg = -1;
             int offset = resolveLocal(ctx, &assign->name, &type, &reg);
             if (offset > 0 || reg != -1) {
+                // Update local's type
+                for (int i = ctx->localCount - 1; i >= 0; i--) {
+                    if (ctx->locals[i].name.length == assign->name.length &&
+                        memcmp(ctx->locals[i].name.start, assign->name.start, assign->name.length) == 0) {
+                        ctx->locals[i].internalType = assignedType;
+                        break;
+                    }
+                }
+                
                 if (reg != -1) {
                      // Store RAX to Reg
                      emitRegisterMove(as, reg, RAX);
@@ -833,6 +843,78 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
 
         case NODE_BINARY_EXPR: {
             BinaryExpr* bin = (BinaryExpr*)node;
+            
+            // ==================== INTEGER SPECIALIZATION: BINARY EXPRESSIONS ====================
+            
+            // Check if both operands are guaranteed integers (for arithmetic ops)
+            if (bin->op.type == TOKEN_PLUS || bin->op.type == TOKEN_MINUS || bin->op.type == TOKEN_STAR) {
+                if (isGuaranteedInteger(bin->left, ctx) && isGuaranteedInteger(bin->right, ctx)) {
+                    // INTEGER FAST-PATH: Use ALU instructions (1-cycle latency!)
+                    
+                    // Emit left operand -> RAX (as int64)
+                    emitNode(as, bin->left, ctx);
+                    int leftReg = ctx->lastResultReg;
+                    
+                    // Emit right operand -> temp register
+                    emitNode(as, bin->right, ctx);
+                    int rightReg = ctx->lastResultReg;
+                    
+                    // If left is in register, use it directly
+                    Register targetReg = (leftReg != -1) ? 
+                        (leftReg == 0 ? RBX : (Register)(R12 + leftReg - 1)) : RAX;
+                    
+                    // If right is in register, use it directly
+                    Register srcReg = (rightReg != -1) ?
+                        (rightReg == 0 ? RBX : (Register)(R12 + rightReg - 1)) : RAX;
+                    
+                    // Ensure left is in target reg
+                    if (leftReg == -1) {
+                        targetReg = RAX; // Left is already in RAX from emit
+                    }
+                    
+                    // If right is literal, might be in RAX
+                    if (rightReg == -1 && leftReg == -1) {
+                        // Both emitted to RAX, need to save left
+                        Asm_Mov_Reg_Reg(as, R10, RAX); // Save right
+                        emitNode(as, bin->left, ctx);   // Re-emit left
+                        srcReg = R10;
+                        targetReg = RAX;
+                    }
+                    
+                    // Perform integer operation
+                    switch (bin->op.type) {
+                        case TOKEN_PLUS:
+                            if (targetReg == srcReg) {
+                                // i = i + i -> ADD reg, reg (doubles the value)
+                                Asm_Add_Reg_Reg(as, targetReg, srcReg);
+                            } else {
+                                Asm_Add_Reg_Reg(as, targetReg, srcReg);
+                            }
+                            ctx->lastExprType = TYPE_INT64;
+                            ctx->lastResultReg = leftReg;
+                            break;
+                        case TOKEN_MINUS:
+                            Asm_Sub_Reg_Reg_64(as, targetReg, srcReg);
+                            ctx->lastExprType = TYPE_INT64;
+                            ctx->lastResultReg = leftReg;
+                            break;
+                        case TOKEN_STAR:
+                            Asm_Imul_Reg_Reg_64(as, targetReg, srcReg);
+                            ctx->lastExprType = TYPE_INT64;
+                            ctx->lastResultReg = leftReg;
+                            break;
+                    }
+                    
+                    // Result is in targetReg, move to RAX if needed
+                    if (targetReg != RAX) {
+                        Asm_Mov_Reg_Reg(as, RAX, targetReg);
+                    }
+                    
+                    break; // Exit NODE_BINARY_EXPR
+                }
+            }
+            
+            // ==================== FALLBACK TO DOUBLE/COMPARISON PATH ====================
             
             // Check for comparison operators
             if (bin->op.type == TOKEN_LESS || bin->op.type == TOKEN_GREATER ||
