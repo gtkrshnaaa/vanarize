@@ -85,6 +85,7 @@ typedef struct {
 typedef struct {
     Token name;
     Token fieldNames[32];
+    Token fieldTypes[32];
     int fieldCount;
 } StructInfo;
 
@@ -114,6 +115,7 @@ static void registerGlobalStructs(AstNode* root) {
                     info->fieldCount = decl->fieldCount;
                     for(int j=0; j<decl->fieldCount; j++) {
                         info->fieldNames[j] = decl->fields[j];
+                        info->fieldTypes[j] = decl->fieldTypes[j];
                     }
                 }
             }
@@ -125,12 +127,35 @@ static void registerGlobalStructs(AstNode* root) {
 
 
 
-static int getFieldOffset(StructInfo* info, Token* field) {
+static int getPackedFieldInfo(StructInfo* info, Token* field, int* outSize, int* outIsPtr) {
+    int dataSize = 0;
+    int headerSize = sizeof(ObjStruct); 
+    
     for (int i=0; i<info->fieldCount; i++) {
+        Token fType = info->fieldTypes[i];
+        int fSize = 8;
+        int isPtr = 0;
+        
+        if (fType.length == 3 && memcmp(fType.start, "int", 3) == 0) fSize = 4;
+        else if (fType.length == 5 && memcmp(fType.start, "float", 5) == 0) fSize = 4;
+        else if ((fType.length == 7 && memcmp(fType.start, "boolean", 7) == 0) || 
+                 (fType.length == 4 && memcmp(fType.start, "byte", 4) == 0)) fSize = 1; 
+        else if ((fType.length == 5 && memcmp(fType.start, "short", 5) == 0) || 
+                 (fType.length == 4 && memcmp(fType.start, "char", 4) == 0)) fSize = 2;
+        else if ((fType.length == 6 && memcmp(fType.start, "double", 6) == 0) || 
+                 (fType.length == 4 && memcmp(fType.start, "long", 4) == 0)) fSize = 8;
+        else { fSize = 8; isPtr = 1; }
+        
+        while (dataSize % fSize != 0) dataSize++;
+        
         Token* fName = &info->fieldNames[i];
         if (fName->length == field->length && memcmp(fName->start, field->start, field->length) == 0) {
-            return 24 + (i * 8); // 24 bytes header (16 obj + 8 count/padding) + 8 bytes per field
+            if (outSize) *outSize = fSize;
+            if (outIsPtr) *outIsPtr = isPtr;
+            return headerSize + dataSize;
         }
+        
+        dataSize += fSize;
     }
     return -1;
 }
@@ -382,129 +407,80 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                  exit(1);
             }
             
-            // Allocate ObjStruct
-            int size = sizeof(ObjStruct) + (info->fieldCount * 8);
-            // We need to call malloc at runtime!
-            // `Asm_Mov_Reg_Ptr(as, RAX, malloc)` would call C malloc.
-            // But we can pre-calculate layout and fill it.
-            // Wait, we need to create the object AT RUNTIME.
-            // So we emit a call to `malloc(size)`.
-            // But we should use our GC allocator later.
-            // For now, use `malloc`.
+            // Calculate Layout
+            int dataSize = 0;
+            uint64_t bitmap = 0;
+            int fieldOffsets[256]; 
             
-            Asm_Mov_Imm64(as, RDI, size);
+            for (int i = 0; i < info->fieldCount; i++) {
+                Token fType = info->fieldTypes[i];
+                int fSize = 8;
+                int isPtr = 0;
+                
+                if (fType.length == 3 && memcmp(fType.start, "int", 3) == 0) fSize = 4;
+                else if (fType.length == 5 && memcmp(fType.start, "float", 5) == 0) fSize = 4;
+                else if ((fType.length == 7 && memcmp(fType.start, "boolean", 7) == 0) || 
+                         (fType.length == 4 && memcmp(fType.start, "byte", 4) == 0)) fSize = 1; 
+                else if ((fType.length == 5 && memcmp(fType.start, "short", 5) == 0) || 
+                         (fType.length == 4 && memcmp(fType.start, "char", 4) == 0)) fSize = 2;
+                else if ((fType.length == 6 && memcmp(fType.start, "double", 6) == 0) || 
+                         (fType.length == 4 && memcmp(fType.start, "long", 4) == 0)) fSize = 8;
+                else { fSize = 8; isPtr = 1; }
+                
+                while (dataSize % fSize != 0) dataSize++;
+                
+                fieldOffsets[i] = dataSize;
+                
+                if (isPtr) {
+                    int wordIdx = fieldOffsets[i] / 8;
+                    bitmap |= (1ULL << wordIdx);
+                }
+                
+                dataSize += fSize;
+            }
+            while (dataSize % 8 != 0) dataSize++;
+            
+            // Allocate
+            int headerSize = sizeof(ObjStruct);
+            int totalSize = headerSize + dataSize;
+            
+            Asm_Mov_Imm64(as, RDI, totalSize);
             void* mallocPtr = (void*)MemAlloc;
             Asm_Mov_Reg_Ptr(as, RAX, mallocPtr);
+            
+            // Align Stack for MemAlloc (SUB RSP, 8)
+            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xEC); Asm_Emit8(as, 0x08);
             Asm_Call_Reg(as, RAX);
+            // Restore Stack (ADD RSP, 8)
+            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xC4); Asm_Emit8(as, 0x08);
             
-            // RAX now has pointer
-            // Initialize Obj header
-            Asm_Push(as, RAX); // Save pointer
-            
-            // MOV RCX, RAX (copy pointer)
+            // Initialize Header
+            Asm_Push(as, RAX); // Stack Aligned (RSP % 16 == 0)
             Asm_Mov_Reg_Reg(as, RCX, RAX);
             
-            // Set type = OBJ_STRUCT (1)
-            Asm_Mov_Imm64(as, RDX, 1);
+            Asm_Mov_Imm64(as, RDX, OBJ_STRUCT);
             Asm_Mov_Mem_Reg(as, RCX, 0, RDX);
             
-            // Set isMarked = false (0)
-            Asm_Mov_Imm64(as, RDX, 0);
-            Asm_Mov_Mem_Reg(as, RCX, 4, RDX); // Assuming bool is 4 bytes aligned
+            Asm_Mov_Imm64(as, RDX, totalSize);
+            Asm_Mov_Mem_Reg(as, RCX, 16, RDX);
             
-            // Register with GC
-            // Stack is misaligned by 8 bytes due to PUSH RAX
-            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xEC); Asm_Emit8(as, 0x08); // SUB RSP, 8
+            Asm_Mov_Imm64(as, RDX, bitmap);
+            Asm_Mov_Mem_Reg(as, RCX, 24, RDX);
             
-            Asm_Mov_Reg_Reg(as, RDI, RAX); // First arg = obj
+            // Register GC (Stack ALREADY aligned due to Push RAX above)
+            Asm_Mov_Reg_Reg(as, RDI, RAX);
             void* gcRegPtr = (void*)GC_RegisterObject;
             Asm_Mov_Reg_Ptr(as, RAX, gcRegPtr);
             Asm_Call_Reg(as, RAX);
             
-            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xC4); Asm_Emit8(as, 0x08); // ADD RSP, 8
-            
-            // Restore pointer
             Asm_Pop(as, RAX);
-            
-            // PUSH it to save while evaluating fields.
             Asm_Push(as, RAX);
             
-            // Set Type/Header
-            // ObjStruct.obj.type = OBJ_STRUCT (1).
-            // ObjStruct.fieldCount = info->fieldCount.
-            // Offset 0: Type (Assuming Obj is {type, next}).
-            // We need to write 1 to [RAX].
-            // But `type` is enum (int) at offset 0? 
-            // `Obj` struct: `Typetype; Obj* next;`.
-            // Assuming 8 byte alignment for `next`.
-            // `type` is 32-bit int?
-            // Let's assume standard layout.
-            // PUSH/POP logic:
-            // Stack: [StructPtr]
-            
-            // We need to fill fields.
-            // We must evaluate expressions in order?
-            // Or arbitrary order from AST? AST key-values.
-            // We iterate Struct Definition Fields to ensure correct order in memory?
-            // AST Init might be out of order or partial?
-            // MasterPlan implies "SensorData s = { ... }".
-            
-            // Safe approach:
-            // 1. Initialize all fields to NULL/Zero.
-            // 2. Iterate Struct Definition Field by Field.
-            // 3. Find matching value in provided AST Init.
-            // 4. Evaluate and Store.
-            
-            // But we have registers constraint.
-            // Simplify: We assume AST `StructInit` matches Struct fields order?
-            // No, keys are explicit.
-            
-            // Strategy:
-            // Emit code to setup Header.
-            // Loop through Struct Fields (from Registry).
-            // For each field, find if AST provides a value.
-            // If yes, emitNode(value).
-            // Then `POP StructPtr` (peek), `MOV [StructPtr + offset], RAX`.
-            // (Wait, `emitNode` clobbers registers. We must restore StructPtr).
-            // Stack: [StructPtr]
-            
-            // 1. Initialize Header
-            Asm_Mov_Reg_Mem(as, RAX, RSP, 0); // Peek StructPtr (Offset 0 from RSP?) Asm_Push(RAX) -> RSP points to it.
-            // Need peek: MOV RAX, [RSP]
-            Asm_Mov_Reg_Mem(as, RAX, RSP, 0); // Load address from stack
-            // Actually Asm_Mov_Reg_Mem expects base+disp.
-            // `Asm_Mov_Reg_Mem(as, RAX, RSP, 0)` -> OK.
-            
-            // Write Type (OBJ_STRUCT = 1)
-            Asm_Mov_Imm64(as, RCX, 1); // OBJ_STRUCT
-            Asm_Mov_Mem_Reg(as, RAX, 0, RCX); // obj.type
-            
-            // Write fieldCount
-            Asm_Mov_Imm64(as, RCX, info->fieldCount);
-            Asm_Mov_Mem_Reg(as, RAX, 16, RCX); // Oops, ObjStruct: Obj (16) + fieldCount (4 or 8) + fields.
-            // Struct Layout:
-            // Obj (16)
-            // fieldCount (4/8). Let's use offset 16 for fieldCount.
-            // But fields[] start where? 
-            // `typedef struct { Obj obj; int fieldCount; Value fields[]; }`.
-            // Alignment: fieldCount is int(4). fields is Value(8).
-            // Padding 4 bytes after fieldCount.
-            // So fields start at 16 + 8 = 24?
-            // sizeof(Obj) = 16.
-            // int fieldCount -> +4 = 20.
-            // Padding -> +4 = 24.
-            // Value fields[] -> 24.
-            // My `getFieldOffset` used `16 + i*8`. That assumed fields started at 16.
-            // I should update `getFieldOffset` to 24 + i*8?
-            // Or remove `fieldCount` from ObjStruct?
-            // Nah, needed for GC scanning.
-            // Let's use 24 as base for fields.
-            
-            Asm_Mov_Mem_Reg(as, RAX, 16, RCX); // fieldCount at 16.
-            // (Assuming writing 64-bit int to 32-bit field is ok/safe if value is small, overwrites padding).
-            
+            // Fill Fields
             for (int i=0; i<info->fieldCount; i++) {
-                 // Find init value for field info->fieldNames[i]
+                 int offset = headerSize + fieldOffsets[i];
+                 Token fType = info->fieldTypes[i];
+
                  AstNode* valExpr = NULL;
                  for (int k=0; k<init->fieldCount; k++) {
                      if (init->fieldNames[k].length == info->fieldNames[i].length &&
@@ -514,65 +490,49 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                      }
                  }
                  
-                 // Compile Value
                  if (valExpr) {
                      emitNode(as, valExpr, ctx);
                  } else {
                      Asm_Mov_Imm64(as, RAX, VAL_NULL);
+                 } 
+                 
+                 Asm_Push(as, RCX);
+                 Asm_Push(as, RDI);
+                 
+                 Asm_Mov_Reg_Mem(as, RDI, RSP, 16);
+                 
+                 // offset & fType already defined above
+                 
+                 if (fType.length == 3 && memcmp(fType.start, "int", 3) == 0) {
+                     Asm_Emit8(as, 0x89); Asm_Emit8(as, 0x87); Asm_Emit32(as, offset);
+                 } else if (fType.length == 5 && memcmp(fType.start, "float", 5) == 0) {
+                     Asm_Emit8(as, 0x89); Asm_Emit8(as, 0x87); Asm_Emit32(as, offset);
+                 } else if ((fType.length == 7 && memcmp(fType.start, "boolean", 7) == 0) || 
+                            (fType.length == 4 && memcmp(fType.start, "byte", 4) == 0)) {
+                     Asm_Emit8(as, 0x88); Asm_Emit8(as, 0x87); Asm_Emit32(as, offset);
+                 } else if ((fType.length == 5 && memcmp(fType.start, "short", 5) == 0) || 
+                            (fType.length == 4 && memcmp(fType.start, "char", 4) == 0)) {
+                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x89); Asm_Emit8(as, 0x87); Asm_Emit32(as, offset);
+                 } else {
+                     Asm_Mov_Mem_Reg(as, RDI, offset, RAX);
                  }
                  
-                 // Store to Struct
-                 // StructPtr is at [RSP].
-
-                 // Manually:
-                 Asm_Mov_Reg_Mem(as, RCX, RSP, 0);
-                 
-                 // Offset = 24 + i*8
-                 Asm_Mov_Mem_Reg(as, RCX, 24 + (i * 8), RAX);
+                 Asm_Pop(as, RDI);
+                 Asm_Pop(as, RCX);
             }
             
-            // Done. Pop StructPtr -> RAX
             Asm_Pop(as, RAX);
             
-            // Tag pointer?
-            // ObjStruct* is a pointer. 
-            // In NaN Boxing, pure pointers might need masking/tagging if they look like doubles.
-            // But we use Pointer Tagging?
-            // MasterPlan: "Pointers stored within 48-bit significand of Signaling NaN".
-            // `ValueToObj` masks it.
-            // `ObjToValue`: `(Value)obj | QNAN | TAG_OBJ?`
-            // `VanarizeValue.h` defines `ObjToValue`.
-            // We need to apply that logic here.
-            // `SIGN_BIT | QNAN` ?
-            // Let's hardcode the Tagging Mask.
-            // `0xFFFC000000000000`?
-            // Let's assume pure pointer for now or replicate `ObjToValue` macro.
-            // `(uint64_t)(obj) | 0x7FFC000000000000` (SIGN_BIT | QNAN)?
-            // Wait, native C `ObjToValue` adds the tag.
-            // We can emit: `OR RAX, ...`.
-            // Let's do `OR RAX, 0xFFFC000000000000` (Simplified tag for Objects).
-            // Actually just `OR RAX, VAL_QNAN`.
-            // `VAL_QNAN` is `0x7FFC000000000000`.
-            // Plus Sign Bit `0x8000...`?
-            // Let's check `VanarizeValue.h` if possible.
-            // For now, I'll return raw pointer (safest for C malloc, bad for boxing).
-            // If I return raw pointer, other code expects boxed.
-            // CodeGen `Asm_Mov_Reg_Mem` etc handles 64-bit values.
-            // If I don't box, it might be treated as double.
-            // I MUST Box.
-            // `OR RAX, 0xFFFC000000000000`.
-            Asm_Mov_Imm64(as, RCX, 0xFFFC000000000000); 
-            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x09); Asm_Emit8(as, 0xC8); // OR RAX, RCX
-            
+            // Apply Tag: QNAN (0x7FFC...)
+            Asm_Mov_Imm64(as, RCX, 0x7FFC000000000000); 
+            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x09); Asm_Emit8(as, 0xC8);
+
+            // Set Type to UNKNOWN (Boxed Object)
+            ctx->lastExprType = TYPE_UNKNOWN;
             break;
         }
-
-
-                    
         case NODE_GET_EXPR: {
             GetExpr* get = (GetExpr*)node;
-            // 3. Resolve Field Offset or Namespace
-            // Only support Variable LHS for now.
             if (get->object->type == NODE_LITERAL_EXPR) {
                 LiteralExpr* lit = (LiteralExpr*)get->object;
                 if (lit->token.type == TOKEN_IDENTIFIER) {
@@ -581,7 +541,6 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                      int offset = resolveLocal(ctx, &lit->token, &typeToken, NULL, &varType);
                      
                      if (offset == -1) {
-                         // Namespace logic
                          char funcName[128];
                          int nsLen = lit->token.length;
                          int methodLen = get->name.length;
@@ -598,15 +557,29 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                              }
                          }
                      } else {
-                         // Struct logic
                          StructInfo* info = resolveStruct(&typeToken);
                          if (info) {
-                            int fOffset = getFieldOffset(info, &get->name);
+                            int fSize=0; int isPtr=0;
+                            int fOffset = getPackedFieldInfo(info, &get->name, &fSize, &isPtr);
                             if (fOffset >= 0) {
                                 emitNode(as, get->object, ctx);
                                 Asm_Mov_Imm64(as, RCX, 0x0000FFFFFFFFFFFF);
                                 Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x21); Asm_Emit8(as, 0xC8); 
-                                Asm_Mov_Reg_Mem(as, RAX, RAX, fOffset);
+                                
+                                if (fSize == 1) {
+                                    Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0xB6); Asm_Emit8(as, 0x80); Asm_Emit32(as, fOffset);
+                                    ctx->lastExprType = TYPE_INT;
+                                } else if (fSize == 2) {
+                                    Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0xB7); Asm_Emit8(as, 0x80); Asm_Emit32(as, fOffset);
+                                    ctx->lastExprType = TYPE_INT;
+                                } else if (fSize == 4) {
+                                    Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x63); Asm_Emit8(as, 0x80); Asm_Emit32(as, fOffset);
+                                    ctx->lastExprType = TYPE_INT;
+                                } else {
+                                    Asm_Mov_Reg_Mem(as, RAX, RAX, fOffset);
+                                    if(isPtr) ctx->lastExprType = TYPE_UNKNOWN;
+                                    else ctx->lastExprType = TYPE_DOUBLE;
+                                }
                                 break;
                             }
                          }
@@ -765,6 +738,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             objStr->chars[len] = '\0';
             Value v = ObjToValue(objStr);
             Asm_Mov_Imm64(as, RAX, v);
+            ctx->lastExprType = TYPE_UNKNOWN; // Boxed String
             break;
         }
         
@@ -970,63 +944,89 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 exit(1);
             }
             
-            // Compile arguments
-            for (int i = 0; i < call->argCount; i++) {
+            // Compile arguments with Raw ABI
+            // We push them to stack first to preserve order evaluation, then pop into correct registers.
+            // But we need to know TYPES to pop into XMM vs GPR.
+            // We can track types in an array.
+            
+            ValueType argTypes[16];
+            int argCount = call->argCount;
+            if (argCount > 16) argCount = 16; // Limit
+            
+            for (int i = 0; i < argCount; i++) {
                 emitNode(as, call->args[i], ctx);
-                // Check if we need to box primitive types for Runtime/Function call
-                // Assuming all functions expect Boxed Values (Standard ABI in Vanarize)
-                // If we implement specialized functions later, we need signature checks.
-                // For now, ALWAYS BOX for CALL.
+                argTypes[i] = ctx->lastExprType;
                 
-                ValueType type = ctx->lastExprType;
-                if (type == TYPE_INT || type == TYPE_LONG || 
-                    type == TYPE_BYTE || type == TYPE_SHORT || type == TYPE_CHAR) {
-                     // Convert Integer(RAX) to Double(XMM0) -> RAX
-                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
-                     Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC0); // CVTSI2SD XMM0, RAX
-                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
-                } else if (type == TYPE_FLOAT) {
-                     // Convert Float(XMM0/RAX lower 32) -> Double(XMM0) -> RAX
-                     // Assuming Float is stored in RAX (as 32-bit bits) or XMM?
-                     // Current VarDecl emits Double logic mostly. 
-                     // But if we strictly implemented Float, we'd need CVTSS2SD.
-                     // For now, let's treat Float as Double in storage to be safe until Phase 7b strict math.
-                     // But if type IS FLOAT, we might need conversion.
-                     // CodeGen currently loads via emitRegisterLoad -> MOVQ (64-bit).
-                     // If it was stored as 32-bit, we have garbage in high bits?
-                     // Safer to Convert:
-                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
-                     // CVTSS2SD XMM0, XMM0 (F3 0F 5A C0)
-                     Asm_Emit8(as, 0xF3); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x5A); Asm_Emit8(as, 0xC0); 
-                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
-                } else if (type == TYPE_BOOLEAN) {
-                     // Convert Bool(RAX=0/1) to VAL_FALSE/VAL_TRUE
-                     Asm_Mov_Imm64(as, RCX, VAL_FALSE);
-                     Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x01); Asm_Emit8(as, 0xC8); // ADD RAX, RCX
-                }
-                
+                // If it's a Float/Double, it might be in RAX (bitcast) or XMM?
+                // Standard emission puts result in RAX usually, or XMM for doubles if we changed that?
+                // Current `emitNode` puts EVERYTHING in RAX (Boxed or Raw).
+                // If Raw Double, it's bitcast in RAX?
+                // Wait, binary exprs use XMM but move to RAX at end.
+                // So RAX holds the bits.
                 Asm_Push(as, RAX);
             }
             
-            // Pop args into registers (System V ABI)
-            Register paramRegs[] = {RDI, RSI, RDX, RCX, R8, R9};
-            for (int i = call->argCount - 1; i >= 0; i--) {
-                if (i < 6) {
-                    Asm_Pop(as, paramRegs[i]);
+            // Pop args into registers based on Raw ABI
+            // GPRs: RDI, RSI, RDX, RCX, R8, R9
+            // XMMs: XMM0 - XMM5
+            Register gprRegs[] = {RDI, RSI, RDX, RCX, R8, R9};
+            
+            int gprMap[16];
+            int xmmMap[16]; // -1 if not used
+            int gprCount = 0;
+            int xmmCount = 0;
+            
+            for(int i=0; i<argCount; i++) {
+                ValueType t = argTypes[i];
+                if (t == TYPE_DOUBLE || t == TYPE_FLOAT) {
+                    if (xmmCount < 6) {
+                        xmmMap[i] = xmmCount++;
+                        gprMap[i] = -1;
+                    } else {
+                        // Stack overflow args - not supported yet
+                        xmmMap[i] = -1; gprMap[i] = -1;
+                    }
+                } else {
+                    if (gprCount < 6) {
+                        gprMap[i] = gprCount++;
+                        xmmMap[i] = -1;
+                    } else {
+                        gprMap[i] = -1; xmmMap[i] = -1;
+                    }
+                }
+            }
+            
+            // Now Pop from N-1 down to 0
+            for(int i=argCount-1; i>=0; i--) {
+                if (xmmMap[i] != -1) {
+                    // It's a double/float, currently in RAX (on stack).
+                    // Pop to RAX
+                    Asm_Pop(as, RAX);
+                    // Move to XMM[k]
+                    // MOVQ XMMk, RAX
+                    int xmm = xmmMap[i]; // 0-5
+                    // Opcode: 66 48 0F 6E /r (MOVQ xmm, r64)
+                    // Reg encoding for XMM: 0=C0, 1=C8, 2=D0...
+                    // ModRM: 11 xxx yyy. yyy=RAX(0).
+                    // xxx = XMM reg index.
+                    uint8_t modrm = 0xC0 + (xmm << 3);
+                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, modrm);
+                } else if (gprMap[i] != -1) {
+                    // Int/Ptr. Pop to GPR.
+                    Asm_Pop(as, gprRegs[gprMap[i]]);
+                } else {
+                    // Stack arg or unsupported
+                    Asm_Pop(as, RAX); // Discard for now
                 }
             }
             
             // Result in RAX.
             // Function Address was PUSHED before Args.
             // We need to POP it and CALL it.
-            // Stack has: [FuncAddr] [Args...]
-            // Args were Popped. Stack has: [FuncAddr]
             Asm_Pop(as, RAX);
             Asm_Call_Reg(as, RAX);
             
-            // CRITICAL FIX: Reset Type to UNKNOWN (Boxed Value) so VarDecl doesn't try to Cast RAX(Value) as Int
             ctx->lastExprType = TYPE_UNKNOWN; 
-            // fprintf(stderr, "DEBUG: Set TYPE_UNKNOWN in Generic Call\n");
             
             // Stack Cleanup
             if (padding > 0) {
@@ -1038,16 +1038,16 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
         case NODE_SET_EXPR: {
             SetExpr* set = (SetExpr*)node;
             
-            // 1. Emit Object -> RAX
             emitNode(as, set->object, ctx);
             Asm_Push(as, RAX);
             
-            // 2. Emit Value -> RAX
             emitNode(as, set->value, ctx);
             ValueType valType = ctx->lastExprType;
             
-            // 3. Resolve Field Offset
             int offset = -1;
+            int fSize = 8; 
+            int isPtr = 0;
+            
             if (set->object->type == NODE_LITERAL_EXPR) {
                 LiteralExpr* lit = (LiteralExpr*)set->object;
                 if (lit->token.type == TOKEN_IDENTIFIER) {
@@ -1055,7 +1055,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     resolveLocal(ctx, &lit->token, &typeToken, NULL, NULL);
                     StructInfo* info = resolveStruct(&typeToken);
                     if (info) {
-                        offset = getFieldOffset(info, &set->name);
+                        offset = getPackedFieldInfo(info, &set->name, &fSize, &isPtr);
                     }
                 }
             }
@@ -1065,19 +1065,21 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                  exit(1);
             }
             
-            // 4. Store
-            // Value in RAX. Object in Stack (Top).
-            // Pop Object -> RCX.
             Asm_Pop(as, RCX);
             
-            // Unbox Object (RCX)
             Asm_Mov_Imm64(as, RDX, 0x0000FFFFFFFFFFFF);
-            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x21); Asm_Emit8(as, 0xD1); // AND RCX, RDX
+            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x21); Asm_Emit8(as, 0xD1); 
             
-            // Store Value (RAX) to [RCX + Offset]
-            Asm_Mov_Mem_Reg(as, RCX, offset, RAX);
+            if (fSize == 1) {
+                Asm_Emit8(as, 0x88); Asm_Emit8(as, 0x81); Asm_Emit32(as, offset); 
+            } else if (fSize == 2) {
+                Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x89); Asm_Emit8(as, 0x81); Asm_Emit32(as, offset); 
+            } else if (fSize == 4) {
+                Asm_Emit8(as, 0x89); Asm_Emit8(as, 0x81); Asm_Emit32(as, offset); 
+            } else {
+                Asm_Mov_Mem_Reg(as, RCX, offset, RAX);
+            }
             
-            // Result is Value (RAX).
             ctx->lastExprType = valType;
             break;
         }
@@ -1652,14 +1654,71 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             funcCtx.stackSize = 0;
             
             // Simple: Spill to stack.
-            Register paramRegs[] = { RDI, RSI, RDX, RCX, R8, R9 };
+            // Simple: Spill to stack.
+            // Raw ABI: Check param types to determine source register (GPR or XMM)
+            Register gprRegs[] = { RDI, RSI, RDX, RCX, R8, R9 };
+            int gprCount = 0;
+            int xmmCount = 0;
+            
             for (int i = 0; i < func->paramCount; i++) {
-                Asm_Push(&funcAs, paramRegs[i]);
+                Token type = func->paramTypes[i];
+                int isFloat = 0;
+                
+                if (type.length == 5 && memcmp(type.start, "float", 5) == 0) isFloat = 1;
+                else if (type.length == 6 && memcmp(type.start, "double", 6) == 0) isFloat = 1;
+
+                if (isFloat) {
+                    if (xmmCount < 6) {
+                        // Push XMM[k]. 
+                        // SUB RSP, 8
+                        // MOVSD [RSP], XMMk
+                        // We use MOVSD (double) for storage to keep 8-byte alignment uniformly.
+                        Asm_Emit8(&funcAs, 0x48); Asm_Emit8(&funcAs, 0x83); Asm_Emit8(&funcAs, 0xEC); Asm_Emit8(&funcAs, 0x08);
+                        
+                        // MOVSD [RSP], XMM
+                        // F2 0F 11 04 24 (if XMM0)
+                        // ModRM: 00 xxx 100(SIB) ... 24
+                        // Simpler: MOVQ [RSP], XMMk (66 48 0F 7E /r)
+                        // Dest is Mem.
+                        uint8_t modrm = 0x04 + (xmmCount << 3); 
+                        // SIB for RSP is 0x24 (Scale=1, Index=None, Base=RSP)
+                        
+                        // Let's use Asm_Mov_Mem_Reg? No that's GPR.
+                        // Manual XMM store:
+                        // MOVQ [RSP], XMMk
+                        Asm_Emit8(&funcAs, 0x66); Asm_Emit8(&funcAs, 0x48); Asm_Emit8(&funcAs, 0x0F); Asm_Emit8(&funcAs, 0x7E); 
+                        // ModRM: 00(Mode) Reg(XMM) RM(RSP=100 -> SIB)
+                        // Reg=xmmCount. RM=4.
+                        Asm_Emit8(&funcAs, modrm);
+                        // SIB: 00 100 100 = 0x24
+                        Asm_Emit8(&funcAs, 0x24);
+                        
+                        xmmCount++;
+                    } else {
+                        // Stack overflow
+                        Asm_Push(&funcAs, RAX); // Placeholder
+                    }
+                } else {
+                    // Int/Ptr
+                    if (gprCount < 6) {
+                        Asm_Push(&funcAs, gprRegs[gprCount++]);
+                    } else {
+                        Asm_Push(&funcAs, RAX); // Stack overflow
+                    }
+                }
+                
                 funcCtx.stackSize += 8;
                 Local* local = &funcCtx.locals[funcCtx.localCount++];
                 local->name = func->params[i];
-                local->typeName = func->paramTypes[i]; // Use parsed type
+                local->typeName = func->paramTypes[i]; 
                 local->offset = funcCtx.stackSize;
+            }
+            
+            // Align Stack to 16 bytes for body execution (CALLs)
+            if (funcCtx.stackSize % 16 != 0) {
+                 Asm_Emit8(&funcAs, 0x48); Asm_Emit8(&funcAs, 0x83); Asm_Emit8(&funcAs, 0xEC); Asm_Emit8(&funcAs, 0x08); // SUB RSP, 8
+                 funcCtx.stackSize += 8;
+                 // Note: This padding is not registered as a local variable, just dead space.
             }
             
             // Compile Body
