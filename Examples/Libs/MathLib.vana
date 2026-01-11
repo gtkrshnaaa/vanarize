@@ -1,0 +1,8 @@
+// Library File
+function Add(int a, int b) :: int {
+    return a + b;
+}
+
+function Sub(int a, int b) :: int {
+    return a - b;
+}

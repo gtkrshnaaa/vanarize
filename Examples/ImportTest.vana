@@ -1,0 +1,14 @@
+// Import Test
+import "./Libs/MathLib.vana";
+
+function Main() {
+    print("Testing Import...");
+    
+    int result = MathLib.Add(10, 20);
+    // print("Add: " + result);
+    
+    int sub = MathLib.Sub(100, 50);
+    // print("Sub: " + sub);
+    
+    print("Import Done.");
+}
