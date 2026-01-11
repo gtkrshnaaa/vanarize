@@ -1,6 +1,7 @@
 #include "Core/GarbageCollector.h"
 #include "Core/VanarizeObject.h"
 #include "Core/VanarizeValue.h"
+#include "Core/Memory.h" 
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -37,6 +38,13 @@ void GC_UnregisterRoot(Value* root) {
             return;
         }
     }
+}
+
+void* GC_Allocate(size_t size) {
+    // Wrapper for MemAlloc with GC registration
+    Obj* obj = (Obj*)MemAlloc(size);
+    GC_RegisterObject(obj);
+    return obj;
 }
 
 static uintptr_t minAddr = UINTPTR_MAX;
@@ -94,6 +102,11 @@ static void markValue(Value value) {
             map >>= 1;
             offset += 8;
         }
+    } else if (obj->type == OBJ_ARRAY) {
+        ObjArray* arr = (ObjArray*)obj;
+        for (int i = 0; i < arr->count; i++) {
+            markValue(arr->elements[i]);
+        }
     }
 }
 
@@ -143,6 +156,13 @@ static void sweep(void) {
         if (!(*obj)->isMarked) {
             // Unreachable object, free it
             Obj* unreached = *obj;
+            
+            // Special Cleanup for Arrays
+            if (unreached->type == OBJ_ARRAY) {
+                ObjArray* arr = (ObjArray*)unreached;
+                free(arr->elements); // Free system heap buffer
+            }
+            
             *obj = unreached->next;
             
             // Return to free list
