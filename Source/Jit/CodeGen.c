@@ -21,12 +21,14 @@ typedef struct {
     Token name;
     Token typeName; // For static typing
     int offset; // RBP offset (negative)
+    int reg; // -1 if stack, 0-4 for RBX, R12-R15
 } Local;
 
 typedef struct {
     Local locals[64];
     int localCount;
     int stackSize;
+    int usedRegisters; // Count of allocated registers (0-5)
 } CompilerContext;
 
 // Struct Registry
@@ -118,16 +120,65 @@ static int getFieldOffset(StructInfo* info, Token* field) {
     return -1;
 }
 
-static int resolveLocal(CompilerContext* ctx, Token* name, Token* outType) {
-    for (int i = 0; i < ctx->localCount; i++) {
+static int resolveLocal(CompilerContext* ctx, Token* name, Token* outType, int* outReg) {
+    // Scan backwards to support shadowing
+    for (int i = ctx->localCount - 1; i >= 0; i--) {
         Token* localName = &ctx->locals[i].name;
         if (localName->length == name->length && 
             memcmp(localName->start, name->start, name->length) == 0) {
             if (outType) *outType = ctx->locals[i].typeName;
+            if (outReg) *outReg = ctx->locals[i].reg;
             return ctx->locals[i].offset;
         }
     }
     return 0; // Not found
+}
+
+static int allocRegister(CompilerContext* ctx) {
+    if (ctx->usedRegisters < 5) {
+        return ctx->usedRegisters++;
+    }
+    return -1;
+}
+
+// Helper to check if node results in a Number guaranteed
+static int isGuaranteedNumber(AstNode* node, CompilerContext* ctx) {
+    if (node->type == NODE_LITERAL_EXPR) {
+        LiteralExpr* lit = (LiteralExpr*)node;
+        if (lit->token.type == TOKEN_NUMBER) return 1;
+        if (lit->token.type == TOKEN_IDENTIFIER) {
+            Token type = {0};
+            if (resolveLocal(ctx, &lit->token, &type, NULL)) {
+                // Check if type token is 'number'
+                if (type.length == 6 && memcmp(type.start, "number", 6) == 0) return 1;
+            }
+        }
+    }
+    // Todo: Binary Expr result is Number? (e.g. 1 + 2)
+    return 0;
+}
+
+static void emitRegisterMove(Assembler* as, int regIndex, int srcReg) {
+    // Move srcReg (usually RAX) to Dest Reg (RBX, R12-R15)
+    // Reg Map: 0:RBX, 1:R12, 2:R13, 3:R14, 4:R15
+    switch (regIndex) {
+        case 0: Asm_Mov_Reg_Reg(as, RBX, srcReg); break;
+        case 1: Asm_Mov_Reg_Reg(as, R12, srcReg); break;
+        case 2: Asm_Mov_Reg_Reg(as, R13, srcReg); break;
+        case 3: Asm_Mov_Reg_Reg(as, R14, srcReg); break;
+        case 4: Asm_Mov_Reg_Reg(as, R15, srcReg); break;
+    }
+}
+
+static void emitRegisterLoad(Assembler* as, int dstReg, int regIndex) {
+    // Move from Src Reg (RBX...) to Dst Reg (usually RAX)
+    switch (regIndex) {
+        case 0: Asm_Mov_Reg_Reg(as, dstReg, RBX); break;
+        case 1: Asm_Mov_Reg_Reg(as, dstReg, R12); break;
+        case 2: Asm_Mov_Reg_Reg(as, dstReg, R13); break;
+        case 3: Asm_Mov_Reg_Reg(as, dstReg, R14); break;
+        case 4: Asm_Mov_Reg_Reg(as, dstReg, R15); break;
+    }
 }
 
 static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
@@ -144,21 +195,37 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
 
         case NODE_VAR_DECL: {
             VarDecl* decl = (VarDecl*)node;
+            
+            // Compile Init Value -> RAX
             if (decl->initializer) {
                 emitNode(as, decl->initializer, ctx);
             } else {
                 Asm_Mov_Imm64(as, RAX, VAL_NULL);
             }
             
-            // Allocate stack space for this variable
+            // Add to Locals
+            Local* local = &ctx->locals[ctx->localCount++];
+            local->name = decl->name;
+            local->typeName = decl->typeName;
+            local->reg = -1; // Default to stack
+
+            // Optimization: If number, try alloc register
+            if (decl->typeName.length == 6 && memcmp(decl->typeName.start, "number", 6) == 0) {
+                 int reg = allocRegister(ctx);
+                 if (reg != -1) {
+                     local->reg = reg;
+                     // Move RAX to Reg
+                     emitRegisterMove(as, reg, RAX);
+                     // Set offset to 0 as it's not on stack (or keep it purely virtual)
+                     local->offset = 0; 
+                     break; 
+                 }
+            }
+
+            // Fallback: Stack
+            Asm_Push(as, RAX);
             ctx->stackSize += 8;
-            ctx->locals[ctx->localCount].name = decl->name;
-            ctx->locals[ctx->localCount].typeName = decl->typeName;
-            ctx->locals[ctx->localCount].offset = ctx->stackSize;
-            ctx->localCount++;
-            
-            // Store RAX (the value) into [RBP - offset]
-            Asm_Mov_Mem_Reg(as, RBP, -ctx->stackSize, RAX);
+            local->offset = ctx->stackSize;
             
             break;
         }
@@ -410,7 +477,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 LiteralExpr* lit = (LiteralExpr*)get->object;
                 if (lit->token.type == TOKEN_IDENTIFIER) {
                     Token typeToken;
-                    resolveLocal(ctx, &lit->token, &typeToken);
+                    resolveLocal(ctx, &lit->token, &typeToken, NULL);
                     
                     StructInfo* info = resolveStruct(&typeToken);
                     if (info) {
@@ -434,20 +501,24 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
 
         case NODE_ASSIGNMENT_EXPR: {
             AssignmentExpr* assign = (AssignmentExpr*)node;
-            
-            // 1. Compile value to be assigned -> RAX
             emitNode(as, assign->value, ctx);
+            // Value in RAX
             
-            // 2. Resolve variable location
             Token type;
-            int offset = resolveLocal(ctx, &assign->name, &type);
-            
-            if (offset != 0) {
-                // Local variable found - store RAX to [RBP-offset]
-                Asm_Mov_Mem_Reg(as, RBP, -offset, RAX);
+            int reg = -1;
+            int offset = resolveLocal(ctx, &assign->name, &type, &reg);
+            if (offset > 0 || reg != -1) {
+                if (reg != -1) {
+                     // Store RAX to Reg
+                     emitRegisterMove(as, reg, RAX);
+                } else {
+                     // Store RAX to [RBP - offset]
+                     // offset is positive from ctx start.
+                     // Local at [RBP - offset]
+                     Asm_Mov_Mem_Reg(as, RBP, -offset, RAX);
+                }
             } else {
-                // Global? Struct field?
-                fprintf(stderr, "Error: Unknown variable '%.*s'\n", assign->name.length, assign->name.start);
+                fprintf(stderr, "JIT Error: Assignment to unknown variable '%.*s'\n", assign->name.length, assign->name.start);
                 exit(1);
             }
             break;
@@ -468,13 +539,19 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             } else if (lit->token.type == TOKEN_IDENTIFIER) {
                 // Resolve Variable
                 Token type;
-                int offset = resolveLocal(ctx, &lit->token, &type);
-                if (offset == 0) {
+                int reg = -1; // Added for resolveLocal
+                int offset = resolveLocal(ctx, &lit->token, &type, &reg); // Updated call
+                if (offset > 0 || reg != -1) { // Updated condition
+                    if (reg != -1) {
+                        emitRegisterLoad(as, RAX, reg); // New
+                    } else {
+                        // Load from [RBP - offset] -> RAX
+                        Asm_Mov_Reg_Mem(as, RAX, RBP, -offset);
+                    }
+                } else {
                      fprintf(stderr, "JIT Error: Undefined variable '%.*s'\n", lit->token.length, lit->token.start);
                      exit(1);
-                }
-                // Load from [RBP - offset] -> RAX
-                Asm_Mov_Reg_Mem(as, RAX, RBP, -offset);
+                 }
             } 
             // ... (True/False/Nil/String handling same as before)
             // Copy paste for brevity or keep structure
@@ -606,9 +683,14 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 
                 // Try to resolve as local variable (function stored in local)
                 Token type;
-                int offset = resolveLocal(ctx, &calleeName, &type);
-                if (offset != 0) {
-                    Asm_Mov_Reg_Mem(as, RAX, RBP, -offset);
+                int reg = -1;
+                int offset = resolveLocal(ctx, &calleeName, &type, &reg);
+                if (offset > 0 || reg != -1) {
+                    if (reg != -1) {
+                        emitRegisterLoad(as, RAX, reg);
+                    } else {
+                        Asm_Mov_Reg_Mem(as, RAX, RBP, -offset);
+                    }
                     Asm_Push(as, RAX);
                 } else {
                     // Try Global Function Table
@@ -668,10 +750,26 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 
                 // Emit left operand -> RAX
                 emitNode(as, bin->left, ctx);
-                Asm_Push(as, RAX);
                 
-                // Emit right operand -> RAX
-                emitNode(as, bin->right, ctx);
+                int rightSimple = (bin->right->type == NODE_LITERAL_EXPR);
+                if (rightSimple) {
+                    Asm_Mov_Reg_Reg(as, R10, RAX); // Save Left to R10
+                    emitNode(as, bin->right, ctx); // Emit Right -> RAX
+                    // Left is in R10.
+                    // Need Left in RCX? Or just use portions of logic below.
+                    // Below logic expects Left popped to RAX, Right in XMM1?
+                    // Wait, logic below:
+                    // RAX has Right. Move to XMM1.
+                    // Pop Left -> RAX. Move to XMM0.
+                    
+                    // We can adapt:
+                    // Right is in RAX.
+                    // Left is in R10.
+                } else {
+                    Asm_Push(as, RAX);
+                    emitNode(as, bin->right, ctx);
+                    Asm_Pop(as, R10); // Pop Left to R10 (unified register)
+                }
                 
                 // Move values to XMM registers for floating-point comparison
                 // RAX has right value, move to XMM1
@@ -682,13 +780,18 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 Asm_Emit8(as, 0x6E);
                 Asm_Emit8(as, 0xC8); // ModRM: XMM1, RAX
                 
-                Asm_Pop(as, RAX); // Get left value
-                // MOVQ XMM0, RAX: 66 48 0F 6E C0
+                // Left is in R10.
+                // MOVQ XMM0, R10: 66 48 0F 6E C2 (R10 is #2? No. R10=10 (0x0A). Need REX.B)
+                // R10 is extended (needs REX.B=1). 
+                // XMM0 is 0.
+                // Opcode: 66 REX.W(48)|REX.B(1)? = 49?
+                // MOVQ XMM, r64 uses REX.W. If r64 is extended, REX.B.
+                // REX = 48 | (R10>=8?1:0) = 49.
                 Asm_Emit8(as, 0x66);
-                Asm_Emit8(as, 0x48);
+                Asm_Emit8(as, 0x49); // REX.WB
                 Asm_Emit8(as, 0x0F);
                 Asm_Emit8(as, 0x6E);
-                Asm_Emit8(as, 0xC0); // ModRM: XMM0, RAX
+                Asm_Emit8(as, 0xC2); // ModRM: XMM0(0), R10(2 in low 3 bits? 10&7=2. Yes) -> C2.
                 
                 // Zero RAX *before* comparison to avoid clobbering flags
                 Asm_Emit8(as, 0x48);
@@ -724,38 +827,26 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 }
                 
                 // Now AL is 1 (True) or 0 (False).
-                // We need to return VAL_TRUE or VAL_FALSE in RAX.
-                // CMP AL, 0
-                // JE FalseLabel
-                // MOV RAX, VAL_TRUE
-                // JMP EndLabel
-                // FalseLabel:
-                // MOV RAX, VAL_FALSE
-                // EndLabel:
+                // Branchless conversion to VAL_TRUE / VAL_FALSE
+                // VAL_FALSE = QNAN | 2
+                // VAL_TRUE  = QNAN | 3 = VAL_FALSE + 1
                 
-                // CMP AL, 0: 3C 00
-                Asm_Emit8(as, 0x3C); Asm_Emit8(as, 0x00);
+                // MOVZX RAX, AL: 0F B6 C0 (Zero extend AL to RAX)
+                Asm_Emit8(as, 0x0F);
+                Asm_Emit8(as, 0xB6);
+                Asm_Emit8(as, 0xC0);
                 
-                // JE + offset (short jump)
-                // We don't know exact size of MOV RAX, VAL_TRUE + JMP.
-                // MOV RAX, imm64 is 10 bytes (48 B8 ...).
-                // JMP rel8 is 2 bytes (EB ...).
-                // So FalseLabel is at Current + 2 + 10 + 2 = Current + 14.
-                // JE 0x0C (12 bytes jump over MOV and JMP? No, 12 bytes total)
+                // MOV RCX, VAL_FALSE
+                Asm_Mov_Imm64(as, RCX, VAL_FALSE);
                 
-                Asm_Emit8(as, 0x74); // JE
-                Asm_Emit8(as, 0x0C); // Jump 12 bytes (Move(10) + Jmp(2))
+                // ADD RAX, RCX: 48 01 C8
+                Asm_Emit8(as, 0x48);
+                Asm_Emit8(as, 0x01);
+                Asm_Emit8(as, 0xC8);
                 
-                // True path:
-                Asm_Mov_Imm64(as, RAX, VAL_TRUE);
+                // Result in RAX is VAL_TRUE or VAL_FALSE. No branches.
                 
-                // JMP over False path
-                Asm_Emit8(as, 0xEB); // JMP rel8
-                Asm_Emit8(as, 0x0A); // Jump 10 bytes (Move(10))
-                
-                // False path:
-                // Move VAL_FALSE to RAX
-                Asm_Mov_Imm64(as, RAX, VAL_FALSE);
+                // No branches.
                 
                 break;
             }
@@ -771,24 +862,78 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // Since we push/pop relative to RSP, locals remain "below".
             // RBP is fixed anchor. Locals at [RBP-8].
             if (bin->op.type == TOKEN_PLUS) {
-                // String concat OR Addition -> Runtime Call
-                 // 1. Emit Left -> RAX
-                emitNode(as, bin->left, ctx);
-                Asm_Push(as, RAX);
+                // String concat OR Addition
                 
-                // 2. Emit Right -> RAX
-                emitNode(as, bin->right, ctx);
+                int safe = isGuaranteedNumber(bin->left, ctx) && isGuaranteedNumber(bin->right, ctx);
                 
-                // RAX has Right. Move to RSI (Arg2).
-                Asm_Mov_Reg_Reg(as, RSI, RAX);
-                
-                // Pop Left to RDI (Arg1).
-                Asm_Pop(as, RDI);
-                
-                void* funcPtr = (void*)Runtime_Add;
-                Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
-                Asm_Call_Reg(as, RAX);
-                // Result in RAX.
+                if (safe) {
+                    // BLIND FAST PATH (No Type Checks)
+                    emitNode(as, bin->left, ctx);
+                    
+                    int rightSimple = (bin->right->type == NODE_LITERAL_EXPR);
+                    
+                    if (rightSimple) {
+                        Asm_Mov_Reg_Reg(as, R10, RAX);
+                        emitNode(as, bin->right, ctx);
+                        // Left=R10, Right=RAX
+                        // Target: RCX=Left for code below?
+                        Asm_Mov_Reg_Reg(as, RCX, R10);
+                    } else {
+                        Asm_Push(as, RAX);
+                        emitNode(as, bin->right, ctx);
+                        Asm_Pop(as, RCX);
+                    }
+                    
+                    // ADDSD XMM0 (Left=RCX), XMM1 (Right=RAX)
+                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC1); // MOVQ XMM0, RCX
+                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8); // MOVQ XMM1, RAX
+                    Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x58); Asm_Emit8(as, 0xC1); // ADDSD XMM0, XMM1
+                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
+                } else {
+                    // CHECKED PATH (Reg Promotion / Runtime Fallback)
+                    // ... (Logic from previous step, kept for safety for non-numbers)
+                    emitNode(as, bin->left, ctx);
+                    Asm_Push(as, RAX);
+                    emitNode(as, bin->right, ctx);
+                    Asm_Pop(as, RCX);
+                    
+                    Asm_Mov_Imm64(as, R11, 0x7FFC000000000000);
+                    
+                    Asm_Mov_Reg_Reg(as, R10, RAX);
+                    Asm_And_Reg_Reg(as, R10, R11);
+                    Asm_Cmp_Reg_Reg(as, R10, R11);
+                    size_t jumpSlow1 = as->offset + 2; 
+                    Asm_Je(as, 0); 
+                    
+                    Asm_Mov_Reg_Reg(as, R10, RCX);
+                    Asm_And_Reg_Reg(as, R10, R11);
+                    Asm_Cmp_Reg_Reg(as, R10, R11);
+                    size_t jumpSlow2 = as->offset + 2;
+                    Asm_Je(as, 0);
+                    
+                    // Fast Add
+                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC1);
+                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8);
+                    Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x58); Asm_Emit8(as, 0xC1);
+                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0);
+                    
+                    size_t jumpDone = as->offset + 1;
+                    Asm_Jmp(as, 0);
+                    
+                    // Slow Path Call
+                    size_t slowStart = as->offset;
+                    Asm_Patch32(as, jumpSlow1, slowStart - (jumpSlow1 + 4));
+                    Asm_Patch32(as, jumpSlow2, slowStart - (jumpSlow2 + 4));
+                    
+                    Asm_Mov_Reg_Reg(as, RDI, RCX);
+                    Asm_Mov_Reg_Reg(as, RSI, RAX);
+                    void* funcPtr = (void*)Runtime_Add;
+                    Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                    Asm_Call_Reg(as, RAX);
+                    
+                    size_t doneStart = as->offset;
+                    Asm_Patch32(as, jumpDone, doneStart - (jumpDone + 4));
+                }
             } else if (bin->op.type == TOKEN_MINUS || bin->op.type == TOKEN_STAR || bin->op.type == TOKEN_SLASH) {
                 // Arithmetic operators: Use XMM registers (floating point)
                 
@@ -847,18 +992,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             } 
             else if (unary->op.type == TOKEN_BANG) {
                 // Not (!)
-                Asm_Mov_Imm64(as, RCX, VAL_FALSE);
-                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8); // CMP RAX, RCX
-                size_t jumpTrue = as->offset + 2;
-                Asm_Je(as, 0);
-                Asm_Mov_Imm64(as, RAX, VAL_FALSE);
-                size_t jumpEnd = as->offset + 2;
-                Asm_Jmp(as, 0); // JMP End
-                size_t trueStart = as->offset;
-                Asm_Patch32(as, jumpTrue, trueStart - (jumpTrue + 4));
-                Asm_Mov_Imm64(as, RAX, VAL_TRUE);
-                size_t endStart = as->offset;
-                Asm_Patch32(as, jumpEnd, endStart - (jumpEnd + 4));
+                // Result in RAX is VAL_TRUE or VAL_FALSE. No branches.
             }
             break;
         }
@@ -910,21 +1044,61 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // Loop start
             size_t loopStart = as->offset;
             
-            // Evaluate condition -> RAX (0 or 1)
-            emitNode(as, whileStmt->condition, ctx);
+            // OPTIMIZATION: Fused Compare-Branch
+            int fused = 0;
+            size_t loopEndPatch = 0;
             
-            // Check if FALSE
-            Asm_Mov_Imm64(as, RCX, VAL_FALSE); // RCX = VAL_FALSE
+            if (whileStmt->condition->type == NODE_BINARY_EXPR) {
+                BinaryExpr* bin = (BinaryExpr*)whileStmt->condition;
+                if (bin->op.type == TOKEN_LESS) { // Only optimizing '<' for now (common in loops)
+                     // Emit Left -> RAX/R10
+                     emitNode(as, bin->left, ctx);
+                     int rightSimple = (bin->right->type == NODE_LITERAL_EXPR);
+                     if (rightSimple) {
+                         Asm_Mov_Reg_Reg(as, R10, RAX);
+                         emitNode(as, bin->right, ctx);
+                         // Left=R10, Right=RAX
+                     } else {
+                         Asm_Push(as, RAX);
+                         emitNode(as, bin->right, ctx);
+                         Asm_Pop(as, R10);
+                     }
+                     // Move to XMM
+                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8); // XMM1 = Right
+                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC2); // XMM0 = Left (R10)
+                     
+                     // UCOMISD XMM0, XMM1 (Left < Right)
+                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2E); Asm_Emit8(as, 0xC1);
+                     
+                     // Loop condition is "Run while True" (Left < Right).
+                     // We jump to End if False (Left >= Right).
+                     // UCOMISD sets CF=1 if Less.
+                     // JAE (Jump if Above or Equal, CF=0) skips loop.
+                     // JAE rel32: 0F 83
+                     Asm_Emit8(as, 0x0F);
+                     Asm_Emit8(as, 0x83);
+                     loopEndPatch = as->offset;
+                     Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
+                     
+                     fused = 1;
+                }
+            }
             
-            // CMP RAX, RCX
-            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8);
-            
-            // JE (jump if Equal to False) to loop end
-            Asm_Emit8(as, 0x0F); // JE rel32
-            Asm_Emit8(as, 0x84);
-            size_t loopEndPatch = as->offset;
-            Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
-            Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
+            if (!fused) {
+                // Default: Evaluate condition -> RAX (0 or 1)
+                emitNode(as, whileStmt->condition, ctx);
+                
+                // Check if FALSE
+                Asm_Mov_Imm64(as, RCX, VAL_FALSE); // RCX = VAL_FALSE
+                // CMP RAX, RCX
+                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8);
+                // JE (jump if Equal to False) to loop end
+                Asm_Emit8(as, 0x0F); // JE rel32
+                Asm_Emit8(as, 0x84);
+                loopEndPatch = as->offset;
+                Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
+                Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
+            }
             
             // Loop body
             emitNode(as, whileStmt->body, ctx);
@@ -1088,13 +1262,22 @@ JitFunction Jit_Compile(AstNode* root) {
             Asm_Emit8(&as, 0x55);             // push rbp
             Asm_Mov_Reg_Reg(&as, RBP, RSP);   // mov rbp, rsp
             
+            // Save Callee-Saved Registers (RBX, R12-R15)
+            // 5 regs * 8 bytes = 40 bytes
+            Asm_Push(&as, RBX);
+            Asm_Push(&as, R12);
+            Asm_Push(&as, R13);
+            Asm_Push(&as, R14);
+            Asm_Push(&as, R15);
+            
             // Reserve Stack Space (Patch later)
-            // SUB RSP, Imm32: 48 81 EC <4 bytes>
-            Asm_Emit8(&as, 0x48); Asm_Emit8(&as, 0x81); Asm_Emit8(&as, 0xEC);
-            size_t stackSizePatch = as.offset;
-            Asm_Emit8(&as, 0x00); Asm_Emit8(&as, 0x00); Asm_Emit8(&as, 0x00); Asm_Emit8(&as, 0x00);
+            // REMOVED: SUB RSP breaks PUSH-based variable declaration pattern.
+            // Asm_Emit8(&as, 0x48); Asm_Emit8(&as, 0x81); Asm_Emit8(&as, 0xEC);
+            // size_t stackSizePatch = as.offset;
+            // Asm_Emit8(&as, 0x00); Asm_Emit8(&as, 0x00); Asm_Emit8(&as, 0x00); Asm_Emit8(&as, 0x00);
             
             CompilerContext ctx = {0};
+            ctx.stackSize = 40; // Reserved for saved regs
             
             // Parameters
             // System V: RDI, RSI, RDX, RCX, R8, R9
@@ -1108,7 +1291,8 @@ JitFunction Jit_Compile(AstNode* root) {
                     ctx.locals[ctx.localCount].offset = ctx.stackSize;
                     ctx.localCount++;
                     // push paramReg to [rbp - offset]
-                    Asm_Mov_Mem_Reg(&as, RBP, -ctx.stackSize, paramRegs[p]);
+                    // Asm_Mov_Mem_Reg(&as, RBP, -ctx.stackSize, paramRegs[p]);
+                    Asm_Push(&as, paramRegs[p]); // Use PUSH for consistency
                 }
             }
 
@@ -1125,10 +1309,37 @@ JitFunction Jit_Compile(AstNode* root) {
             // ctx.stackSize might be 8. 8 + 8(RBP) = 16. Aligned.
             // If stackSize 16. 16+8 = 24. Misaligned.
             // We should align stackSize to 16 bytes.
-            int alignedStack = (ctx.stackSize + 15) & ~15;
-            Asm_Patch32(&as, stackSizePatch, alignedStack);
+            // Stack Alignment Rule: (SavedRegs + LocalStack) % 16 == 0
+            // SavedRegs = 40 bytes.
+            // 40 % 16 = 8. So we are misaligned by 8 bytes relative to 16-byte boundary (after PUSH RBP).
+            // We need to subtract an amount 'S' such that (40 + S) % 16 == 0.
             
-            Asm_Mov_Reg_Reg(&as, RSP, RBP);   // mov rsp, rbp
+            int localSize = ctx.stackSize - 40;
+            if (localSize < 0) localSize = 0;
+            
+            int totalPushed = 40 + localSize;
+            int padding = (16 - (totalPushed % 16)) % 16;
+            int finalStackSize = localSize + padding;
+            
+            // Write to SUB RSP, Imm32
+            // REMOVED: No more backpatching.
+            // uint32_t sizeVal = (uint32_t)finalStackSize;
+            // memcpy(as.buffer + stackSizePatch, &sizeVal, 4);
+            
+            // Epilogue
+            // Restore Stack: LEA RSP, [RBP - 40]
+            // LEA RSP, [RBP - 40]: 48 8D 65 D8
+            Asm_Emit8(&as, 0x48); Asm_Emit8(&as, 0x8D); Asm_Emit8(&as, 0x65); Asm_Emit8(&as, 0xD8);
+            Asm_Emit8(&as, 0x48); Asm_Emit8(&as, 0x8D); Asm_Emit8(&as, 0x65); Asm_Emit8(&as, 0xD8);
+            
+            // Pop Regs (Reverse order)
+            Asm_Pop(&as, R15);
+            Asm_Pop(&as, R14);
+            Asm_Pop(&as, R13);
+            Asm_Pop(&as, R12);
+            Asm_Pop(&as, RBX);
+            
+            // Restore RBP and Ret
             Asm_Pop(&as, RBP);                // pop rbp
             Asm_Ret(&as);                     // ret
             
