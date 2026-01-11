@@ -1,0 +1,30 @@
+// =========================================================================
+// RunAllBenchmarks.vana - Benchmark Suite Information
+// =========================================================================
+
+function Main() {
+    print("============================================================");
+    print("   VANARIZE COMPREHENSIVE BENCHMARK SUITE");
+    print("   Target: 1,000,000,000 operations/second");
+    print("============================================================");
+    print("");
+    print("Available benchmarks (100M iterations each):");
+    print("");
+    print("  1. IntBenchmark.vana      - 32-bit integer ops");
+    print("  2. LongBenchmark.vana     - 64-bit integer ops");
+    print("  3. FloatBenchmark.vana    - 32-bit float ops");
+    print("  4. DoubleBenchmark.vana   - 64-bit double ops");
+    print("  5. BooleanBenchmark.vana  - Boolean logic ops");
+    print("  6. LoopOnlyBenchmark.vana - Pure loop overhead");
+    print("");
+    print("Run with timing:");
+    print("  time ./vanarize Examples/Benchmarks/IntBenchmark.vana");
+    print("");
+    print("Performance interpretation:");
+    print("  < 0.10 sec = 1.0B+ ops/sec (EXCELLENT)");
+    print("  < 0.33 sec = 300M+ ops/sec (GOOD)");
+    print("  < 1.00 sec = 100M+ ops/sec (ACCEPTABLE)");
+    print("  > 1.00 sec = NEEDS OPTIMIZATION");
+    print("");
+    print("============================================================");
+}

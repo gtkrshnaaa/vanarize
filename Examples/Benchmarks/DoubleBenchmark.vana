@@ -1,0 +1,22 @@
+// =========================================================================
+// DoubleBenchmark.vana - Double (64-bit FP) Performance Benchmark
+// =========================================================================
+// Tests: 64-bit floating-point arithmetic operations
+// Run with: time ./vanarize Examples/Benchmarks/DoubleBenchmark.vana
+// =========================================================================
+
+function Main() {
+    print("=== DOUBLE (64-bit FP) BENCHMARK ===");
+    print("Iterations: 100,000,000");
+    print("Starting...");
+    
+    int iterations = 100000000;
+    double accumulator = 0.0;
+    
+    for (int i = 0; i < iterations; i = i + 1) {
+        accumulator = accumulator + 1.0;
+    }
+    
+    print("Done!");
+    print("Accumulator: " + accumulator);
+}

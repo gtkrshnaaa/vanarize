@@ -1,0 +1,25 @@
+// =========================================================================
+// BooleanBenchmark.vana - Boolean Performance Benchmark
+// =========================================================================
+// Tests: Boolean condition evaluation
+// Run with: time ./vanarize Examples/Benchmarks/BooleanBenchmark.vana
+// =========================================================================
+
+function Main() {
+    print("=== BOOLEAN BENCHMARK ===");
+    print("Iterations: 100,000,000");
+    print("Starting...");
+    
+    int iterations = 100000000;
+    boolean flag = true;
+    int counter = 0;
+    
+    for (int i = 0; i < iterations; i = i + 1) {
+        if (flag) {
+            counter = counter + 1;
+        }
+    }
+    
+    print("Done!");
+    print("Counter: " + counter);
+}

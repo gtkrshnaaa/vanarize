@@ -1,0 +1,20 @@
+// =========================================================================
+// LoopOnlyBenchmark.vana - Pure Loop Overhead Benchmark
+// =========================================================================
+// Tests: Raw loop performance without operations
+// Run with: time ./vanarize Examples/Benchmarks/LoopOnlyBenchmark.vana
+// =========================================================================
+
+function Main() {
+    print("=== PURE LOOP BENCHMARK ===");
+    print("Iterations: 100,000,000");
+    print("Starting...");
+    
+    int iterations = 100000000;
+    
+    for (int i = 0; i < iterations; i = i + 1) {
+        // Empty loop
+    }
+    
+    print("Done!");
+}
