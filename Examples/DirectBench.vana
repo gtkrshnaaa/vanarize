@@ -1,26 +1,18 @@
-// Direct inline benchmark - no function calls
+// Direct inline benchmark using StdBenchmark
 function Main() {
+    print("Starting DirectBench with StdBenchmark...");
     
-    double start = StdTime.Now();
-    for (int i = 0; i < 1; i = i + 1) {
+    // Warmup / Start
+    StdBenchmark.Start();
+    
+    // Loop 100M times
+    double iterations = 100000000.0;
+    
+    for (int i = 0; i < 100000000; i = i + 1) {
        // Empty loop
     }
     
-    double end = StdTime.Now();
-    print("Start:");
-    print(start);
-    print("End:");
-    print(end);
-    double elapsed = end - start;
+    StdBenchmark.End(iterations);
     
-    print("Elapsed:");
-    print(elapsed);
-    if (elapsed == 0) {
-        print("Elapsed is zero!");
-        elapsed = 1; // Prevent division by zero
-    }
-    // Ops/sec = Iterations / (Elapsed_ns / 1e9)
-    //         = Iterations * 1e9 / Elapsed_ns
-    double ops = 10000000 * 1000000000 / elapsed;
-    print(ops);
+    print("Done.");
 }
