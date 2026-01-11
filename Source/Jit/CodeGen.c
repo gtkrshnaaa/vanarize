@@ -249,9 +249,26 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
     switch (node->type) {
         case NODE_BLOCK: {
             BlockStmt* block = (BlockStmt*)node;
+            
+            // Scope Management
+            int savedStackSize = ctx->stackSize;
+            int savedLocalCount = ctx->localCount;
+            
             for (int i = 0; i < block->count; i++) {
                 emitNode(as, block->statements[i], ctx);
             }
+            
+            // Pop Stack (if locals were declared)
+            int diff = ctx->stackSize - savedStackSize;
+            if (diff > 0) {
+                 // ADD RSP, diff
+                 Asm_Add_Reg_Imm(as, RSP, diff);
+                 ctx->stackSize = savedStackSize;
+            }
+            
+            // Restore Scope
+            ctx->localCount = savedLocalCount;
+            
             break;
         }
         
@@ -1651,7 +1668,15 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // Setup Context for Function
             CompilerContext funcCtx;
             funcCtx.localCount = 0;
-            funcCtx.stackSize = 0;
+            funcCtx.localCount = 0;
+            
+            // ABI: Save Callee-Saved Registers (RBX, R12-R15)
+            Asm_Push(&funcAs, RBX);
+            Asm_Push(&funcAs, R12);
+            Asm_Push(&funcAs, R13);
+            Asm_Push(&funcAs, R14);
+            Asm_Push(&funcAs, R15);
+            funcCtx.stackSize = 40; // 5 regs * 8 bytes
             
             // Simple: Spill to stack.
             // Simple: Spill to stack.
@@ -1727,7 +1752,18 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             
             // Default Return (if user didn't)
             Asm_Mov_Imm64(&funcAs, RAX, VAL_NULL); // Default return nil
-            Asm_Mov_Reg_Reg(&funcAs, RSP, RBP);
+            
+            // Epilogue: Restore Regs
+            Asm_Mov_Reg_Reg(&funcAs, RSP, RBP); // Reset stack
+            // SUB RSP, 40 (0x28)
+            Asm_Emit8(&funcAs, 0x48); Asm_Emit8(&funcAs, 0x83); Asm_Emit8(&funcAs, 0xEC); Asm_Emit8(&funcAs, 0x28);
+            
+            Asm_Pop(&funcAs, R15);
+            Asm_Pop(&funcAs, R14);
+            Asm_Pop(&funcAs, R13);
+            Asm_Pop(&funcAs, R12);
+            Asm_Pop(&funcAs, RBX);
+            
             Asm_Pop(&funcAs, RBP);
             Asm_Ret(&funcAs);
             
@@ -1773,7 +1809,17 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 Asm_Mov_Imm64(as, RAX, VAL_NULL);
             }
             // Epilogue and Ret
-            Asm_Mov_Reg_Reg(as, RSP, RBP);
+            // Epilogue and Ret
+            Asm_Mov_Reg_Reg(as, RSP, RBP); // Reset stack
+            // SUB RSP, 40 (0x28)
+            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xEC); Asm_Emit8(as, 0x28);
+            
+            Asm_Pop(as, R15);
+            Asm_Pop(as, R14);
+            Asm_Pop(as, R13);
+            Asm_Pop(as, R12);
+            Asm_Pop(as, RBX);
+            
             Asm_Pop(as, RBP);
             Asm_Ret(as);
             break;
