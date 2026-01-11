@@ -9,7 +9,9 @@ function Main() {
         // Empty
     }
     
-    number elapsed = StdTime.Measure();
+    number end = StdTime.Now();
+    number elapsed = end - start;
+
     number billion = 1000000000;
     number opsPerSec = iterations * billion / elapsed;
     

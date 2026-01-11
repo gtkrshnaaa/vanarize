@@ -1,20 +1,22 @@
 // Direct inline benchmark - no function calls
 function Main() {
     
-    StdTime.Measure();
-    number start = clock();
+    number start = StdTime.Now();
     
     for (number i = 0; i < 10000000; i = i + 1) {
         // Empty loop
     }
     
-    number end = clock();
-    number elapsed = StdTime.Measure(); // This line was likely intended to be kept or modified, but the instruction snippet was malformed.
+    number end = StdTime.Now();
+    number elapsed = end - start;
+    
     print(elapsed);
     if (elapsed == 0) {
         print("Elapsed is zero!");
         elapsed = 1; // Prevent division by zero
     }
+    // Ops/sec = Iterations / (Elapsed_ns / 1e9)
+    //         = Iterations * 1e9 / Elapsed_ns
     number ops = 10000000 * 1000000000 / elapsed;
     print(ops);
 }

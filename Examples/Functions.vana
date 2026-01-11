@@ -1,5 +1,6 @@
-// VANARIZE TEST: Function Calls and Return Values
-// Master Plan Compliance: PascalCase Functions, Typed Params/Return
+// VANARIZE REFERENCE IMPLEMENTATION
+// Test Case: Functions (PascalCase, Typed Parameters, Return Types)
+// Master Plan Compliance: Sections 4.4 and 3.2
 
 function Add(number a, number b) :: number {
     return a + b;

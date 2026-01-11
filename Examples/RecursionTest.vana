@@ -1,11 +1,9 @@
-function Factorial(number n) :: number { 
-    if (n < 2) { 
-        return 1; 
-    } 
-    return n * Factorial(n - 1); 
-} 
+function Factorial(number n) :: number {
+    if (n <= 1) return 1;
+    return n * Factorial(n - 1);
+}
 
-function Main() { 
-    number res = Factorial(5);
-    print(res); 
+function Main() {
+    number result = Factorial(5);
+    print(result);
 }
