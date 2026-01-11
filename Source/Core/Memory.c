@@ -13,17 +13,12 @@ typedef struct FreeBlock {
     struct FreeBlock* next;
 } FreeBlock;
 
+// Bump Pointer "Wilderness"
+static char* bumpPointer = NULL;
+
 static char* heapStart = NULL;
 static char* heapEnd = NULL;
 FreeBlock* freeList = NULL; // Export for GC
-
-void GC_ResetHeap(void) {
-    // After sweep, rebuild free list
-    // For now, simple approach: reset to single large block
-    freeList = (FreeBlock*)heapStart;
-    freeList->size = HEAP_SIZE - sizeof(FreeBlock);
-    freeList->next = NULL;
-}
 
 void VM_InitMemory(void) {
     heapStart = mmap(NULL, HEAP_SIZE, 
@@ -37,61 +32,83 @@ void VM_InitMemory(void) {
     }
     
     heapEnd = heapStart + HEAP_SIZE;
+    bumpPointer = heapStart;
     
-    // Initialize free list with one big block
-    freeList = (FreeBlock*)heapStart;
-    freeList->size = HEAP_SIZE - sizeof(FreeBlock);
-    freeList->next = NULL;
+    // Initialize free list (empty initially)
+    freeList = NULL;
 }
 
 void* MemAlloc(size_t size) {
+    // 1. O(1) Bump Pointer Fast Path
     // Align to 8 bytes
     size = (size + 7) & ~7;
-    // Add space for size header
     size_t totalSize = size + sizeof(size_t);
     
-    // Find first fit
+    if (bumpPointer + totalSize <= heapEnd) {
+        FreeBlock* block = (FreeBlock*)bumpPointer;
+        bumpPointer += totalSize;
+        
+        // Tag size
+        *(size_t*)block = totalSize;
+        return (char*)block + sizeof(size_t);
+    }
+
+    // 2. Slow Path: Try Free List
     FreeBlock** block = &freeList;
     while (*block) {
         if ((*block)->size >= totalSize) {
             FreeBlock* found = *block;
             
-            // Split block if remainder is large enough
+            // Split block logic
             if (found->size > totalSize + sizeof(FreeBlock) + 16) {
                 FreeBlock* remainder = (FreeBlock*)((char*)found + totalSize);
                 remainder->size = found->size - totalSize;
                 remainder->next = found->next;
                 *block = remainder;
             } else {
-                // Use entire block
                 *block = found->next;
             }
             
-            // Store size and return pointer after header
             *(size_t*)found = totalSize;
             return (char*)found + sizeof(size_t);
         }
         block = &(*block)->next;
     }
     
-    // No free block found, trigger GC
-    fprintf(stderr, "[Vanarize Core] Heap full, triggering GC...\n");
+    // 3. Fallback: GC
+    // fprintf(stderr, "[Vanarize Core] Heap full (bump & free list exhausted), triggering GC...\n");
     GC_Collect();
     
-    // Try again after GC
+    // 4. Retry Free List (GC puts reclaimed objects here)
     block = &freeList;
     while (*block) {
         if ((*block)->size >= totalSize) {
             FreeBlock* found = *block;
-            *block = found->next;
+            if (found->size > totalSize + sizeof(FreeBlock) + 16) {
+                FreeBlock* remainder = (FreeBlock*)((char*)found + totalSize);
+                remainder->size = found->size - totalSize;
+                remainder->next = found->next;
+                *block = remainder;
+            } else {
+                *block = found->next;
+            }
             *(size_t*)found = totalSize;
             return (char*)found + sizeof(size_t);
         }
         block = &(*block)->next;
     }
     
-    fprintf(stderr, "[Vanarize Core] OOM: No free blocks after GC.\n");
+    // 5. Retry Bump Pointer (Unlikely unless Compacting GC implemented later)
+    if (bumpPointer + totalSize <= heapEnd) {
+         FreeBlock* ptr = (FreeBlock*)bumpPointer;
+         bumpPointer += totalSize;
+         *(size_t*)ptr = totalSize;
+         return (char*)ptr + sizeof(size_t);
+    }
+
+    fprintf(stderr, "[Vanarize Core] OOM: Heap exhausted even after GC.\n");
     exit(1);
+    return NULL;
 }
 
 void VM_FreeMemory(void) {
