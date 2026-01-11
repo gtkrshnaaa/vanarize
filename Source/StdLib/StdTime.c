@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 199309L
 #include "StdLib/StdTime.h"
 #include "Core/VanarizeValue.h"
 #include <time.h>
