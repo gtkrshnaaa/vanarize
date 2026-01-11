@@ -86,6 +86,90 @@ void Asm_And_Reg_Reg(Assembler* as, Register dst, Register src) {
     Asm_Emit8(as, modrm);
 }
 
+// ==================== INTEGER SPECIALIZATION INSTRUCTIONS ====================
+
+// ADD r64, imm32 (with INC optimization for imm=1)
+// Opcode: 48 81 /0 id (ADD), or 48 FF /0 (INC)
+void Asm_Add_Reg_Imm(Assembler* as, Register dst, int32_t imm) {
+    // Optimization: ADD r64, 1 -> INC r64 (1 byte shorter, same speed)
+    if (imm == 1) {
+        Asm_Inc_Reg(as, dst);
+        return;
+    }
+    
+    // REX.W prefix
+    uint8_t rex = 0x48;
+    if (dst >= R8) rex |= 0x01;
+    
+    Asm_Emit8(as, rex);
+    Asm_Emit8(as, 0x81);  // ADD r/m64, imm32
+    
+    // ModRM: Mod=11 (register), Reg=/0, RM=dst
+    uint8_t modrm = 0xC0 | (dst & 7);
+    Asm_Emit8(as, modrm);
+    
+    // Emit imm32 (little-endian)
+    for (int i = 0; i < 4; i++) {
+        Asm_Emit8(as, (uint8_t)(imm & 0xFF));
+        imm >>= 8;
+    }
+}
+
+// SUB r64, r64
+// Opcode: 48 29 /r
+void Asm_Sub_Reg_Reg_64(Assembler* as, Register dst, Register src) {
+    uint8_t rex = 0x48;
+    if (src >= R8) rex |= 0x04;
+    if (dst >= R8) rex |= 0x01;
+    
+    Asm_Emit8(as, rex);
+    Asm_Emit8(as, 0x29);  // SUB opcode
+    
+    uint8_t srcEnc = src & 7;
+    uint8_t dstEnc = dst & 7;
+    uint8_t modrm = 0xC0 | (srcEnc << 3) | dstEnc;
+    Asm_Emit8(as, modrm);
+}
+
+// IMUL r64, r64 (Two-operand signed multiply)
+// Opcode: 48 0F AF /r
+void Asm_Imul_Reg_Reg_64(Assembler* as, Register dst, Register src) {
+    uint8_t rex = 0x48;
+    if (dst >= R8) rex |= 0x04;  // Note: dst is in REG field for IMUL
+    if (src >= R8) rex |= 0x01;  // src is in R/M field
+    
+    Asm_Emit8(as, rex);
+    Asm_Emit8(as, 0x0F);  // Two-byte opcode prefix
+    Asm_Emit8(as, 0xAF);  // IMUL opcode
+    
+    uint8_t dstEnc = dst & 7;
+    uint8_t srcEnc = src & 7;
+    uint8_t modrm = 0xC0 | (dstEnc << 3) | srcEnc;
+    Asm_Emit8(as, modrm);
+}
+
+// INC r64
+// Opcode: 48 FF /0
+void Asm_Inc_Reg(Assembler* as, Register reg) {
+    uint8_t rex = 0x48;
+    if (reg >= R8) rex |= 0x01;
+    
+    Asm_Emit8(as, rex);
+    Asm_Emit8(as, 0xFF);
+    Asm_Emit8(as, 0xC0 | (reg & 7));  // ModRM: /0 extension
+}
+
+// DEC r64
+// Opcode: 48 FF /1
+void Asm_Dec_Reg(Assembler* as, Register reg) {
+    uint8_t rex = 0x48;
+    if (reg >= R8) rex |= 0x01;
+    
+    Asm_Emit8(as, rex);
+    Asm_Emit8(as, 0xFF);
+    Asm_Emit8(as, 0xC8 | (reg & 7));  // ModRM: /1 extension
+}
+
 // PUSH r64
 // Opcode: 50 + rd
 void Asm_Push(Assembler* as, Register src) {
@@ -225,6 +309,39 @@ void Asm_Je(Assembler* as, int32_t offset) {
 void Asm_Jne(Assembler* as, int32_t offset) {
     Asm_Emit8(as, 0x0F);
     Asm_Emit8(as, 0x85);
+    for (int i=0; i<4; i++) {
+        Asm_Emit8(as, (uint8_t)(offset & 0xFF));
+        offset >>= 8;
+    }
+}
+
+// JAE rel32 (Jump if Above or Equal - unsigned >=)
+// Opcode: 0F 83 cd
+void Asm_Jae(Assembler* as, int32_t offset) {
+    Asm_Emit8(as, 0x0F);
+    Asm_Emit8(as, 0x83);
+    for (int i=0; i<4; i++) {
+        Asm_Emit8(as, (uint8_t)(offset & 0xFF));
+        offset >>= 8;
+    }
+}
+
+// JGE rel32 (Jump if Greater or Equal - signed >=)
+// Opcode: 0F 8D cd
+void Asm_Jge(Assembler* as, int32_t offset) {
+    Asm_Emit8(as, 0x0F);
+    Asm_Emit8(as, 0x8D);
+    for (int i=0; i<4; i++) {
+        Asm_Emit8(as, (uint8_t)(offset & 0xFF));
+        offset >>= 8;
+    }
+}
+
+// JL rel32 (Jump if Less - signed <)
+// Opcode: 0F 8C cd
+void Asm_Jl(Assembler* as, int32_t offset) {
+    Asm_Emit8(as, 0x0F);
+    Asm_Emit8(as, 0x8C);
     for (int i=0; i<4; i++) {
         Asm_Emit8(as, (uint8_t)(offset & 0xFF));
         offset >>= 8;
