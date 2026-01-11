@@ -15,6 +15,38 @@
 #include <string.h>
 #include <math.h>  // For floor() in integer detection
 
+// GLOBAL FUNCTION REGISTRY
+typedef struct {
+    char name[128];
+    void* address;
+} GlobalFunction;
+
+static GlobalFunction globalFunctions[256];
+static int globalFunctionCount = 0;
+static void* mainFunc = NULL;
+
+static void registerGlobalFunction(const char* name, int length, void* address) {
+    if (globalFunctionCount >= 256) {
+        fprintf(stderr, "JIT Error: Global function limit reached.\n");
+        exit(1);
+    }
+    int storeLen = length > 127 ? 127 : length;
+    memcpy(globalFunctions[globalFunctionCount].name, name, storeLen);
+    globalFunctions[globalFunctionCount].name[storeLen] = '\0';
+    globalFunctions[globalFunctionCount].address = address;
+    globalFunctionCount++;
+}
+
+static void* findGlobalFunction(const char* name, int length) {
+    for (int i = 0; i < globalFunctionCount; i++) {
+        int storedLen = strlen(globalFunctions[i].name);
+        if (storedLen == length && memcmp(globalFunctions[i].name, name, length) == 0) {
+            return globalFunctions[i].address;
+        }
+    }
+    return NULL;
+}
+
 #define MAX_JIT_SIZE 4096
 
 // Internal value type tracking for JIT optimization (Java types)
@@ -89,44 +121,9 @@ static void registerGlobalStructs(AstNode* root) {
     }
 }
 
-// Global Function Table
-typedef struct {
-    Token name;
-    void* address; // Pointer to JITted code
-} FuncEntry;
 
-static FuncEntry globalFunctions[128];
-static int globalFuncCount = 0;
 
-static int resolveGlobalFunction(Token* name) {
-    for(int i=0; i<globalFuncCount; i++) {
-        Token* fName = &globalFunctions[i].name;
-        if (fName->length == name->length && memcmp(fName->start, name->start, name->length) == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
 
-static void registerGlobalFunctions(AstNode* root) {
-    // Reset count for new compilation (simplified)
-    globalFuncCount = 0; 
-    
-    // Assume root is a list of declarations (Program usually)
-    if (root->type == NODE_BLOCK) {
-        BlockStmt* block = (BlockStmt*)root;
-        for(int i=0; i<block->count; i++) {
-            if (block->statements[i]->type == NODE_FUNCTION_DECL) {
-                FunctionDecl* func = (FunctionDecl*)block->statements[i];
-                if (globalFuncCount < 128) {
-                    globalFunctions[globalFuncCount].name = func->name;
-                    globalFunctions[globalFuncCount].address = NULL;
-                    globalFuncCount++;
-                }
-            }
-        }
-    }
-}
 
 static int getFieldOffset(StructInfo* info, Token* field) {
     for (int i=0; i<info->fieldCount; i++) {
@@ -150,7 +147,7 @@ static int resolveLocal(CompilerContext* ctx, Token* name, Token* outType, int* 
             return ctx->locals[i].offset;
         }
     }
-    return 0; // Not found
+    return -1; // Not found
 }
 
 static int allocRegister(CompilerContext* ctx) {
@@ -209,6 +206,8 @@ static void emitRegisterMove(Assembler* as, int regIndex, int srcReg) {
         case 4: Asm_Mov_Reg_Reg(as, R15, srcReg); break;
     }
 }
+
+
 
 static void emitRegisterLoad(Assembler* as, int dstReg, int regIndex) {
     // Move from Src Reg (RBX...) to Dst Reg (usually RAX)
@@ -572,95 +571,51 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     
         case NODE_GET_EXPR: {
             GetExpr* get = (GetExpr*)node;
-            
-            // Special case: StdTime namespace
-            if (get->object->type == NODE_LITERAL_EXPR) {
-                LiteralExpr* lit = (LiteralExpr*)get->object;
-                if (lit->token.type == TOKEN_IDENTIFIER &&
-                    lit->token.length == 7 && 
-                    memcmp(lit->token.start, "StdTime", 7) == 0) {
-                    
-                    // StdTime.Now() / Measure() / Sleep()
-                    if (get->name.length == 3 && memcmp(get->name.start, "Now", 3) == 0) {
-                        void* funcPtr = (void*)StdTime_Now;
-                        Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
-                        break; // RAX has function pointer, done
-                    }
-                    else if (get->name.length == 7 && memcmp(get->name.start, "Measure", 7) == 0) {
-                        void* funcPtr = (void*)StdTime_Measure;
-                        Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
-                        break;
-                    }
-                    else if (get->name.length == 5 && memcmp(get->name.start, "Sleep", 5) == 0) {
-                        void* funcPtr = (void*)StdTime_Sleep;
-                        Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
-                        break;
-                    }
-                    
-                    fprintf(stderr, "JIT Error: Unknown StdTime method '%.*s'\n", get->name.length, get->name.start);
-                    exit(1);
-                }
-            } else if (get->object->type == NODE_LITERAL_EXPR) {
-                // StdBenchmark Check
-                LiteralExpr* lit = (LiteralExpr*)get->object;
-                if (lit->token.type == TOKEN_IDENTIFIER && 
-                    lit->token.length == 12 && 
-                    memcmp(lit->token.start, "StdBenchmark", 12) == 0) {
-                        
-                        void* funcPtr = NULL;
-                        if (get->name.length == 5 && memcmp(get->name.start, "Start", 5) == 0) {
-                            funcPtr = (void*)StdBenchmark_Start;
-                        } else if (get->name.length == 3 && memcmp(get->name.start, "End", 3) == 0) {
-                            funcPtr = (void*)StdBenchmark_End;
-                        }
-
-                        if (funcPtr) {
-                            Asm_Mov_Imm64(as, RAX, (uint64_t)funcPtr);
-                            ctx->lastExprType = TYPE_UNKNOWN; // Function pointer
-                            break;
-                        }
-                    }
-                   // Fallthrough to normal property
-            }
-
-            // Normal Property Access logic...
-            // 1. Compile Object -> RAX
-            emitNode(as, get->object, ctx);
-            
-            // 2. Unbox if needed (remove tag)
-            Asm_Mov_Imm64(as, RCX, 0x0000FFFFFFFFFFFF);
-            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x21); Asm_Emit8(as, 0xC8); // AND RAX, RCX
-            
-            // 3. Resolve Field Offset
-            // We need Type of Object.
-            // If Object is Variable, we lookup type in ctx.
+            // 3. Resolve Field Offset or Namespace
             // Only support Variable LHS for now.
             if (get->object->type == NODE_LITERAL_EXPR) {
                 LiteralExpr* lit = (LiteralExpr*)get->object;
                 if (lit->token.type == TOKEN_IDENTIFIER) {
-                    Token typeToken = {0};
-                    resolveLocal(ctx, &lit->token, &typeToken, NULL, NULL);
-                    
-                    StructInfo* info = resolveStruct(&typeToken);
-                    if (info) {
-                        int offset = getFieldOffset(info, &get->name);
-                        // Offset adjustment: my `getFieldOffset` returns 16+...
-                        // I changed base to 24 in INIT.
-                        // recalculate: 24 + index * 8.
-                        // I should update `getFieldOffset` function too.
-                        // Assume `getFieldOffset` logic updated to 24 base.
-                        
-                        if (offset >= 0) {
-                            Asm_Mov_Reg_Mem(as, RAX, RAX, offset);
-                        } else {
-                            // Error
-                        }
-                    } 
+                     Token typeToken = {0};
+                     ValueType varType = TYPE_UNKNOWN;
+                     int offset = resolveLocal(ctx, &lit->token, &typeToken, NULL, &varType);
+                     
+                     if (offset == -1) {
+                         // Namespace logic
+                         char funcName[128];
+                         int nsLen = lit->token.length;
+                         int methodLen = get->name.length;
+                         if (nsLen + methodLen + 1 < 128) {
+                             memcpy(funcName, lit->token.start, nsLen);
+                             funcName[nsLen] = '_';
+                             memcpy(funcName + nsLen + 1, get->name.start, methodLen);
+                             funcName[nsLen + 1 + methodLen] = '\0';
+                             void* funcPtr = findGlobalFunction(funcName, nsLen + 1 + methodLen);
+                             if (funcPtr) {
+                                 Asm_Mov_Imm64(as, RAX, (long long)funcPtr);
+                                 ctx->lastExprType = TYPE_UNKNOWN; 
+                                 break;
+                             }
+                         }
+                     } else {
+                         // Struct logic
+                         StructInfo* info = resolveStruct(&typeToken);
+                         if (info) {
+                            int fOffset = getFieldOffset(info, &get->name);
+                            if (fOffset >= 0) {
+                                emitNode(as, get->object, ctx);
+                                Asm_Mov_Imm64(as, RCX, 0x0000FFFFFFFFFFFF);
+                                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x21); Asm_Emit8(as, 0xC8); 
+                                Asm_Mov_Reg_Mem(as, RAX, RAX, fOffset);
+                                break;
+                            }
+                         }
+                     }
                 }
             }
+            emitNode(as, get->object, ctx);
             break;
         }
-
         case NODE_ASSIGNMENT_EXPR: {
             AssignmentExpr* assign = (AssignmentExpr*)node;
             emitNode(as, assign->value, ctx);
@@ -997,17 +952,9 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     Asm_Push(as, RAX);
                 } else {
                     // Try Global Function Table
-                    int funcIdx = resolveGlobalFunction(&calleeName);
-                    if (funcIdx != -1) {
-                        // Found global function!
-                        // Load address from table: MOV RAX, [Addr]
-                        // &globalFunctions[funcIdx].address
-                        void* slotAddr = &globalFunctions[funcIdx].address;
-                        Asm_Mov_Reg_Ptr(as, RAX, slotAddr); // RAX = pointer to slot
-                        // Now load the actual code address from the slot
-                        Asm_Mov_Reg_Mem(as, RAX, RAX, 0); // RAX = [RAX]
-                        
-                        // Push to stack (as expected by call logic below)
+                    void* funcAddr = findGlobalFunction(calleeName.start, calleeName.length);
+                    if (funcAddr) {
+                        Asm_Mov_Imm64(as, RAX, (long long)funcAddr);
                         Asm_Push(as, RAX);
                     } else {
                         fprintf(stderr, "JIT Error: Undefined function '%.*s'\n", calleeName.length, calleeName.start);
@@ -1602,6 +1549,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             
             // Compile Body
             emitNode(&funcAs, func->body, &funcCtx);
+
             
             // Default Return (if user didn't)
             Asm_Mov_Imm64(&funcAs, RAX, VAL_NULL); // Default return nil
@@ -1629,6 +1577,17 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             local->name = func->name;
             local->offset = ctx->stackSize;
             
+            // Protect Executable Memory
+            Jit_ProtectExec(funcMem, MAX_JIT_SIZE);
+
+            // 5. Register Global Function
+            registerGlobalFunction(func->name.start, func->name.length, funcMem);
+
+            // 6. Check for Main
+            if (func->name.length == 4 && memcmp(func->name.start, "Main", 4) == 0) {
+                 mainFunc = funcMem; // Update global
+            }
+
             break;
         }
         
@@ -1653,133 +1612,26 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
 JitFunction Jit_Compile(AstNode* root) {
    if (!root) return NULL;
     
-    // 1. Register Global Structs and Functions
     registerGlobalStructs(root);
-    registerGlobalFunctions(root);
     
-    // 2. Scan and Compile Functions
-    // We expect root to be a block of statements (Global Scope)
+    // Compile Top-Level Block
+    void* mem = Jit_AllocExec(MAX_JIT_SIZE);
+    Assembler as;
+    Asm_Init(&as, (uint8_t*)mem, MAX_JIT_SIZE);
     
-    if (root->type != NODE_BLOCK) {
+    CompilerContext ctx = {0};
+    ctx.localCount = 0;
+    ctx.stackSize = 0;
+    
+    // Emission
+    emitNode(&as, root, &ctx);
+    
+    // Verify Executable
+    Jit_ProtectExec(mem, MAX_JIT_SIZE);
+    
+    if (mainFunc == NULL) {
+        fprintf(stderr, "JIT Error: No 'Main' function found.\n");
         return NULL;
     }
-    BlockStmt* prog = (BlockStmt*)root;
-    
-    void* mainFunc = NULL;
-
-    for (int i = 0; i < prog->count; i++) {
-        if (prog->statements[i]->type == NODE_FUNCTION_DECL) {
-            FunctionDecl* func = (FunctionDecl*)prog->statements[i];
-            
-            // Find global index
-            int gIdx = resolveGlobalFunction(&func->name);
-            
-            Assembler as;
-            // 64KB per function (plenty)
-            uint8_t buffer[65536]; 
-            Asm_Init(&as, buffer, 65536);
-            
-            // ... (rest of compilation logic)
-            // Function Prologue
-            Asm_Emit8(&as, 0x55);             // push rbp
-            Asm_Mov_Reg_Reg(&as, RBP, RSP);   // mov rbp, rsp
-            
-            // Save Callee-Saved Registers (RBX, R12-R15)
-            // 5 regs * 8 bytes = 40 bytes
-            Asm_Push(&as, RBX);
-            Asm_Push(&as, R12);
-            Asm_Push(&as, R13);
-            Asm_Push(&as, R14);
-            Asm_Push(&as, R15);
-            
-            // Reserve Stack Space (Patch later)
-            // REMOVED: SUB RSP breaks PUSH-based variable declaration pattern.
-            // Asm_Emit8(&as, 0x48); Asm_Emit8(&as, 0x81); Asm_Emit8(&as, 0xEC);
-            // size_t stackSizePatch = as.offset;
-            // Asm_Emit8(&as, 0x00); Asm_Emit8(&as, 0x00); Asm_Emit8(&as, 0x00); Asm_Emit8(&as, 0x00);
-            
-            CompilerContext ctx = {0};
-            ctx.stackSize = 40; // Reserved for saved regs
-            
-            // Parameters
-            // System V: RDI, RSI, RDX, RCX, R8, R9
-            Register paramRegs[] = {RDI, RSI, RDX, RCX, R8, R9};
-            for(int p=0; p<func->paramCount; p++) {
-                if (p < 6) {
-                    ctx.stackSize += 8;
-                    // ... existing logic ...
-                    ctx.locals[ctx.localCount].name = func->params[p];
-                    ctx.locals[ctx.localCount].typeName = func->paramTypes[p];
-                    ctx.locals[ctx.localCount].offset = ctx.stackSize;
-                    ctx.localCount++;
-                    // push paramReg to [rbp - offset]
-                    // Asm_Mov_Mem_Reg(&as, RBP, -ctx.stackSize, paramRegs[p]);
-                    Asm_Push(&as, paramRegs[p]); // Use PUSH for consistency
-                }
-            }
-
-            
-            // Body
-            emitNode(&as, func->body, &ctx);
-            
-            // Default return (if not present)
-            // Epilogue
-            
-            // Patch Stack Size
-            // align stack to 16 bytes for ABI calls logic? 
-            // If we use Call, RSP must be 16-byte aligned. 
-            // ctx.stackSize might be 8. 8 + 8(RBP) = 16. Aligned.
-            // If stackSize 16. 16+8 = 24. Misaligned.
-            // We should align stackSize to 16 bytes.
-            // Stack Alignment Rule: (SavedRegs + LocalStack) % 16 == 0
-            // SavedRegs = 40 bytes.
-            // 40 % 16 = 8. So we are misaligned by 8 bytes relative to 16-byte boundary (after PUSH RBP).
-            // We need to subtract an amount 'S' such that (40 + S) % 16 == 0.
-            
-            int localSize = ctx.stackSize - 40;
-            if (localSize < 0) localSize = 0;
-            
-            int totalPushed = 40 + localSize;
-            int padding = (16 - (totalPushed % 16)) % 16;
-            int finalStackSize __attribute__((unused)) = localSize + padding;
-            
-            // Write to SUB RSP, Imm32
-            // REMOVED: No more backpatching.
-            // uint32_t sizeVal = (uint32_t)finalStackSize;
-            // memcpy(as.buffer + stackSizePatch, &sizeVal, 4);
-            
-            // Epilogue
-            // Restore Stack: LEA RSP, [RBP - 40]
-            // LEA RSP, [RBP - 40]: 48 8D 65 D8
-            Asm_Emit8(&as, 0x48); Asm_Emit8(&as, 0x8D); Asm_Emit8(&as, 0x65); Asm_Emit8(&as, 0xD8);
-            Asm_Emit8(&as, 0x48); Asm_Emit8(&as, 0x8D); Asm_Emit8(&as, 0x65); Asm_Emit8(&as, 0xD8);
-            
-            // Pop Regs (Reverse order)
-            Asm_Pop(&as, R15);
-            Asm_Pop(&as, R14);
-            Asm_Pop(&as, R13);
-            Asm_Pop(&as, R12);
-            Asm_Pop(&as, RBX);
-            
-            // Restore RBP and Ret
-            Asm_Pop(&as, RBP);                // pop rbp
-            Asm_Ret(&as);                     // ret
-            
-            // Allocate Executable Memory
-            void* code = Jit_AllocExec(as.offset); // Allocate exact size
-            memcpy(code, as.buffer, as.offset);
-            
-            // Update Global Table
-            if (gIdx != -1) {
-                globalFunctions[gIdx].address = code;
-            }
-            
-            // Check for Main
-            if (func->name.length == 4 && memcmp(func->name.start, "Main", 4) == 0) {
-                mainFunc = code;
-            }
-        }
-    }
-    
-    return mainFunc;
+    return (JitFunction)mainFunc;
 }
