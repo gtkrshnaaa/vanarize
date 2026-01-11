@@ -16,7 +16,7 @@ The development of Vanarize adheres to the **"Zero-Dependency Imperative."** The
 ### 1.1 The Fundamental Axioms
 
 1. **Direct Execution Paradigm:** Source code  AST  x64 Machine Code. No intermediate bytecode representation is permitted.
-2. **Type Rigidity:** Types are resolved at compile-time. All 8 Java primitives and `string` are evaluated strictly.
+2. **Type Rigidity:** Types are resolved at compile-time. All standard primitives and `string` are evaluated strictly.
 3. **Syntactic Purity:** The usage of the underscore character (`_`) is strictly prohibited in all identifiers to enforce readability.
 4. **Implicit Modularity:** The file system hierarchy defines the namespace structure.
 5. **Native Asynchrony:** Concurrency is handled via a native Event Loop (epoll/kqueue) integrated with the JIT runtime.
@@ -87,7 +87,7 @@ The core of Vanarize. It translates AST nodes directly into x64 opcodes.
 
 ### 4.1 Primitive Types
 
-Vanarize strictly implements the standard Java primitive types for maximum compatibility and predictable performance.
+Vanarize strictly implements standard primitive types for maximum compatibility and predictable performance.
 
 | Type | Bit-width | Description | Internal Representation |
 | --- | --- | --- | --- |
@@ -102,7 +102,7 @@ Vanarize strictly implements the standard Java primitive types for maximum compa
 | **`string`** | N/A | Immutable String | Pointer to Heap-allocated UTF-8 |
 
 > [!IMPORTANT]
-> **Strict Type System**: Implicit narrowing conversions (e.g., `long` to `int`) are prohibited. Widening conversions follow Java's rules. Arithmetic between mixed types (e.g., `int` + `double`) results in the most precise type (`double`), matching Java's behavior.
+> **Strict Type System**: Implicit narrowing conversions (e.g., `long` to `int`) are prohibited. Widening conversions follow standard promotion rules. Arithmetic between mixed types (e.g., `int` + `double`) results in the most precise type (`double`), matching predictable behavior.
 
 ### 4.2 Syntax Rules
 
