@@ -8,7 +8,8 @@
 typedef enum {
     OBJ_STRING,
     OBJ_STRUCT,
-    OBJ_FUNCTION
+    OBJ_FUNCTION,
+    OBJ_ARRAY
 } ObjType;
 
 typedef struct Obj Obj;
@@ -40,7 +41,14 @@ typedef struct {
     uint8_t data[];        // Packed data (flexible array)
 } ObjStruct;
 
-// Helper to cast Value to String
+typedef struct {
+    Obj obj;
+    int count;
+    int capacity;
+    Value* elements; // Pointer to heap array of Values
+} ObjArray;
+
+// Helper to check object type
 ObjString* AsString(Value value);
 
 // Helper to check object type
@@ -58,5 +66,13 @@ static inline char* AsCString(Value v) {
     ObjString* str = (ObjString*)ValueToObj(v);
     return str->chars;
 }
+
+// Array Implementation
+ObjArray* Runtime_NewArray(int capacity);
+void Runtime_ArrayPush(ObjArray* arr, Value val);
+Value Runtime_ArrayGet(ObjArray* arr, int index);
+void Runtime_ArraySet(ObjArray* arr, int index, Value val);
+int Runtime_ArrayLength(ObjArray* arr);
+Value Runtime_ArrayPop(ObjArray* arr);
 
 #endif // VANARIZE_CORE_OBJECT_H
