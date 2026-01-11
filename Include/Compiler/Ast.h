@@ -22,7 +22,10 @@ typedef enum {
     NODE_STRUCT_INIT,
     NODE_GET_EXPR, // obj.field
     NODE_UNARY_EXPR,
-    NODE_AWAIT_EXPR  // await expression (MASTERPLAN: async/await)
+    NODE_AWAIT_EXPR,  // await expression (MASTERPLAN: async/await)
+    NODE_ARRAY_LITERAL,
+    NODE_INDEX_EXPR,
+    NODE_INDEX_SET_EXPR
 } NodeType;
 
 typedef struct AstNode AstNode;
@@ -153,5 +156,27 @@ typedef struct {
     AstNode main;
     AstNode* expression;  // The async expression to await
 } AwaitExpr;
+
+// Array Literal [e1, e2]
+typedef struct {
+    AstNode main;
+    AstNode** elements;
+    int count;
+} ArrayLiteral;
+
+// Index Access array[index]
+typedef struct {
+    AstNode main;
+    AstNode* array;
+    AstNode* index;
+} IndexExpr;
+
+// Index Set array[index] = value
+typedef struct {
+    AstNode main;
+    AstNode* array;
+    AstNode* index;
+    AstNode* value;
+} IndexSetExpr;
 
 #endif // VANARIZE_COMPILER_AST_H
