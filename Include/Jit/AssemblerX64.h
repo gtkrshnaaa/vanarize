@@ -35,8 +35,11 @@ void Asm_Mov_Imm64(Assembler* as, Register dst, uint64_t val);
 // MOV dst, src
 void Asm_Mov_Reg_Reg(Assembler* as, Register dst, Register src);
 
-// ADD dst, src
+// ADD dst, src (64-bit register add)
 void Asm_Add_Reg_Reg(Assembler* as, Register dst, Register src);
+
+// ADD r64, imm32 (Integer specialization - with INC optimization)
+void Asm_Add_Reg_Imm(Assembler* as, Register dst, int32_t imm);
 
 // AND dst, src
 void Asm_And_Reg_Reg(Assembler* as, Register dst, Register src);
@@ -59,6 +62,12 @@ void Asm_Mov_Reg_Mem(Assembler* as, Register dst, Register base, int32_t offset)
 // MOV [base + offset], src
 void Asm_Mov_Mem_Reg(Assembler* as, Register base, int32_t offset, Register src);
 
+// Integer Arithmetic (64-bit ALU)
+void Asm_Sub_Reg_Reg_64(Assembler* as, Register dst, Register src);
+void Asm_Imul_Reg_Reg_64(Assembler* as, Register dst, Register src);
+void Asm_Inc_Reg(Assembler* as, Register reg);
+void Asm_Dec_Reg(Assembler* as, Register reg);
+
 // CMP reg, imm64 (Only supports 32-bit immediate for now for simplicity or full?)
 // CMP r64, r64 is also useful.
 // Let's do CMP r64, imm32 (sign extended) is standard '48 81 /7 id'
@@ -71,6 +80,9 @@ void Asm_Cmp_Reg_Reg(Assembler* as, Register dst, Register src);
 void Asm_Je(Assembler* as, int32_t offset);
 void Asm_Jne(Assembler* as, int32_t offset);
 void Asm_Jmp(Assembler* as, int32_t offset);
+void Asm_Jae(Assembler* as, int32_t offset);  // Jump if Above or Equal (unsigned >=)
+void Asm_Jge(Assembler* as, int32_t offset);  // Jump if Greater or Equal (signed >=)
+void Asm_Jl(Assembler* as, int32_t offset);   // Jump if Less (signed <)
 
 // Patching
 void Asm_Patch32(Assembler* as, size_t offset, int32_t value);
