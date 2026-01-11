@@ -1,18 +1,18 @@
-// Fast Arithmetic Benchmark - 100M operations
-// Master Plan Compliance: StdTime usage, Typed definitions
 function Main() {
+    print("Starting Bench...");
+    
     number iterations = 100000000;
     number i = 0;
     number start = StdTime.Now(); // Nanoseconds
     
     for (number i = 0; i < iterations; i = i + 1) {
-        // Empty
     }
     
     number end = StdTime.Now();
     number elapsed = end - start;
 
     number billion = 1000000000;
+    if (elapsed == 0) elapsed = 1;
     number opsPerSec = iterations * billion / elapsed;
     
     print(opsPerSec);
