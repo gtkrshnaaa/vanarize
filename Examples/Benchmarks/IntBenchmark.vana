@@ -3,24 +3,21 @@
 // =========================================================================
 // Tests: 32-bit integer arithmetic operations
 // Target: 1,000,000,000 operations/second
-// Run with: time ./vanarize Examples/Benchmarks/IntBenchmark.vana
 // =========================================================================
 
 function Main() {
     print("=== INT (32-bit) BENCHMARK ===");
-    print("Iterations: 100,000,000");
-    print("Starting...");
     
     int iterations = 100000000;
     int accumulator = 0;
+    
+    StdBenchmark.Start();
     
     for (int i = 0; i < iterations; i = i + 1) {
         accumulator = accumulator + 1;
     }
     
-    print("Done!");
-    print("Accumulator: " + accumulator);
-    print("");
-    print("Use 'time ./vanarize ...' to measure performance");
-    print("Target: < 0.1 sec = 1B ops/sec");
+    StdBenchmark.End(iterations);
+    
+    print(accumulator);
 }

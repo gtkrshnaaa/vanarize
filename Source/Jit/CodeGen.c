@@ -833,11 +833,14 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                         if (method.length == 5 && memcmp(method.start, "Start", 5) == 0) {
                             funcPtr = (void*)StdBenchmark_Start;
                         } else if (method.length == 3 && memcmp(method.start, "End", 3) == 0) {
-                             // End(iterations) - 1 arg
+                             // End(iterations) - 1 arg (needs to be Value = double)
                              if (call->argCount > 0) {
                                  emitNode(as, call->args[0], ctx);
-                                 Asm_Push(as, RAX); 
-                                 Asm_Pop(as, RDI); // Arg1
+                                 // Convert int to double (Value)
+                                 // CVTSI2SD XMM0, RAX
+                                 Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC0);
+                                 // MOVQ RDI, XMM0
+                                 Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC7);
                              }
                             funcPtr = (void*)StdBenchmark_End;
                         }

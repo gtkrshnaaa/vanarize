@@ -1,6 +1,0 @@
-function Main() {
-    double x = StdTime.Now();
-    for (int i = 0; i < 100; i = i + 1) {
-    }
-    print("Debug Loop Done");
-}

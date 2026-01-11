@@ -2,21 +2,22 @@
 // LongBenchmark.vana - Long Integer (long) Performance Benchmark
 // =========================================================================
 // Tests: 64-bit integer arithmetic operations
-// Run with: time ./vanarize Examples/Benchmarks/LongBenchmark.vana
+// Target: 1,000,000,000 operations/second
 // =========================================================================
 
 function Main() {
     print("=== LONG (64-bit) BENCHMARK ===");
-    print("Iterations: 100,000,000");
-    print("Starting...");
     
     long iterations = 100000000;
     long accumulator = 0;
+    
+    StdBenchmark.Start();
     
     for (long i = 0; i < iterations; i = i + 1) {
         accumulator = accumulator + 1;
     }
     
-    print("Done!");
-    print("Accumulator: " + accumulator);
+    StdBenchmark.End(iterations);
+    
+    print(accumulator);
 }

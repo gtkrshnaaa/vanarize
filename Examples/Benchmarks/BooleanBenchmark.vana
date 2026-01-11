@@ -2,17 +2,17 @@
 // BooleanBenchmark.vana - Boolean Performance Benchmark
 // =========================================================================
 // Tests: Boolean condition evaluation
-// Run with: time ./vanarize Examples/Benchmarks/BooleanBenchmark.vana
+// Target: 1,000,000,000 operations/second
 // =========================================================================
 
 function Main() {
     print("=== BOOLEAN BENCHMARK ===");
-    print("Iterations: 100,000,000");
-    print("Starting...");
     
     int iterations = 100000000;
     boolean flag = true;
     int counter = 0;
+    
+    StdBenchmark.Start();
     
     for (int i = 0; i < iterations; i = i + 1) {
         if (flag) {
@@ -20,6 +20,7 @@ function Main() {
         }
     }
     
-    print("Done!");
-    print("Counter: " + counter);
+    StdBenchmark.End(iterations);
+    
+    print(counter);
 }
