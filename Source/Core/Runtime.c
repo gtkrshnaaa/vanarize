@@ -10,6 +10,7 @@ double ValueToNumber(Value v);
 ObjString* NewString(const char* chars, int length);
 
 Value Runtime_Add(Value a, Value b) {
+    // printf("[Runtime] Add %lx + %lx\n", a, b);
     if (IsNumber(a) && IsNumber(b)) {
         return NumberToValue(ValueToNumber(a) + ValueToNumber(b));
     }
