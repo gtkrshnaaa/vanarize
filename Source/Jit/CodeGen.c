@@ -192,7 +192,7 @@ static int isGuaranteedInteger(AstNode* node, CompilerContext* ctx) {
             char buffer[64];
             int len = lit->token.length < 63 ? lit->token.length : 63;
             for (int i = 0; i < len; i++) buffer[i] = lit->token.start[i];
-            buffer[len] = '\\0';
+            buffer[len] = '\0';
             
             double val = strtod(buffer, NULL);
             // Check if value is whole and within int64 range
@@ -265,7 +265,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                         char buffer[64];
                         int len = lit->token.length < 63 ? lit->token.length : 63;
                         for (int i = 0; i < len; i++) buffer[i] = lit->token.start[i];
-                        buffer[len] = '\\0';
+                        buffer[len] = '\0';
                         
                         double value = strtod(buffer, NULL);
                         
@@ -322,9 +322,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
         }
 
         case NODE_STRUCT_DECL: {
-            StructDecl* decl = (StructDecl*)node;
-            // Register struct
-            // No code to emit
+            // Register struct - no code to emit
             break;
         }
 
@@ -567,7 +565,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             if (get->object->type == NODE_LITERAL_EXPR) {
                 LiteralExpr* lit = (LiteralExpr*)get->object;
                 if (lit->token.type == TOKEN_IDENTIFIER) {
-                    Token typeToken;
+                    Token typeToken = {0};
                     resolveLocal(ctx, &lit->token, &typeToken, NULL);
                     
                     StructInfo* info = resolveStruct(&typeToken);
@@ -902,6 +900,8 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                             Asm_Imul_Reg_Reg_64(as, targetReg, srcReg);
                             ctx->lastExprType = TYPE_INT64;
                             ctx->lastResultReg = leftReg;
+                            break;
+                        default:
                             break;
                     }
                     
@@ -1492,7 +1492,7 @@ JitFunction Jit_Compile(AstNode* root) {
             
             int totalPushed = 40 + localSize;
             int padding = (16 - (totalPushed % 16)) % 16;
-            int finalStackSize = localSize + padding;
+            int finalStackSize __attribute__((unused)) = localSize + padding;
             
             // Write to SUB RSP, Imm32
             // REMOVED: No more backpatching.
