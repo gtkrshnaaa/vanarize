@@ -4,11 +4,7 @@
 #include <ctype.h>
 #include <stdio.h>
 
-typedef struct {
-    const char* start;
-    const char* current;
-    int line;
-} LexerState;
+
 
 static LexerState lexer;
 
@@ -240,4 +236,12 @@ Token Lexer_NextToken(void) {
     }
 
     return errorToken("Unexpected character.");
+}
+
+LexerState Lexer_GetState(void) {
+    return lexer;
+}
+
+void Lexer_RestoreState(LexerState state) {
+    lexer = state;
 }

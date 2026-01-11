@@ -3,10 +3,100 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
 
 static Token currentToken;
 static Token previousToken;
 static Token nextToken; // Lookahead
+
+static const char* currentNamespacePrefix = NULL;
+
+// Forward declarations
+static void scanNext();
+static void advance();
+
+typedef struct {
+    Token current;
+    Token previous;
+    Token next;
+    const char* namespacePrefix;
+} ParserState;
+
+static ParserState Parser_GetState() {
+    ParserState state;
+    state.current = currentToken;
+    state.previous = previousToken;
+    state.next = nextToken;
+    state.namespacePrefix = currentNamespacePrefix;
+    return state;
+}
+
+static void Parser_RestoreState(ParserState state) {
+    currentToken = state.current;
+    previousToken = state.previous;
+    nextToken = state.next;
+    currentNamespacePrefix = state.namespacePrefix;
+}
+
+static char* readFile(const char* path) {
+    FILE* file = fopen(path, "rb");
+    if (file == NULL) {
+        fprintf(stderr, "Could not open file \"%s\".\n", path);
+        exit(1);
+    }
+    fseek(file, 0L, SEEK_END);
+    size_t fileSize = ftell(file);
+    rewind(file);
+    char* buffer = (char*)malloc(fileSize + 1);
+    if (buffer == NULL) {
+        fprintf(stderr, "Not enough memory to read \"%s\".\n", path);
+        exit(1);
+    }
+    size_t bytesRead = fread(buffer, sizeof(char), fileSize, file);
+    if (bytesRead < fileSize) {
+        fprintf(stderr, "Could not read file \"%s\".\n", path);
+        exit(1);
+    }
+    buffer[bytesRead] = '\0';
+    fclose(file);
+    return buffer;
+}
+
+// Forward declare declaration
+static AstNode* declaration();
+
+static AstNode* compileFile(const char* path, const char* namespacePrefix) {
+    // 1. Save State
+    ParserState pState = Parser_GetState();
+    LexerState lState = Lexer_GetState();
+    
+    // 2. Read File
+    char* source = readFile(path);
+    
+    // 3. Init Compiler for new file
+    Lexer_Init(source);
+    currentNamespacePrefix = namespacePrefix;
+    scanNext(); // Prime
+    advance();  // Prime
+    
+    // 4. Parse File (Program Level)
+    BlockStmt* block = malloc(sizeof(BlockStmt));
+    block->main.type = NODE_BLOCK;
+    block->statements = malloc(sizeof(AstNode*) * 1024);
+    block->count = 0;
+    
+    while (currentToken.type != TOKEN_EOF) {
+        block->statements[block->count++] = declaration();
+    }
+    
+    // 5. Restore State
+    Parser_RestoreState(pState);
+    Lexer_RestoreState(lState);
+    
+    // Note: We leak 'source' intentionally because Tokens point to it.
+    
+    return (AstNode*)block;
+}
 
 static void scanNext() {
     for (;;) {
@@ -351,6 +441,57 @@ static AstNode* parseVarDecl(bool typed, Token typeToken) {
 }
 
 static AstNode* declaration() {
+    // 0. Import Statement
+    if (currentToken.type == TOKEN_IMPORT) {
+        advance();
+        consume(TOKEN_STRING, "Expect string after 'import'.");
+        
+        // LiteralExpr* pathExpr = ...
+        // We need the string content. 
+        // Token string has quotes.
+        int len = previousToken.length - 2;
+        char* path = malloc(len + 1);
+        memcpy(path, previousToken.start + 1, len);
+        path[len] = '\0';
+        
+        // Extract Namespace (Basename)
+        // e.g. "Libs/Math.vana" -> "Math"
+        char* base = strrchr(path, '/');
+        char* filename = base ? base + 1 : path;
+        
+        // Find extension dot
+        char* dot = strrchr(filename, '.');
+        int nameLen = dot ? (int)(dot - filename) : (int)strlen(filename);
+        
+        char* nsPrefix = malloc(nameLen + 2); // "Math_"
+        memcpy(nsPrefix, filename, nameLen);
+        nsPrefix[nameLen] = '_';
+        nsPrefix[nameLen + 1] = '\0';
+        
+        AstNode* moduleBlock = compileFile(path, nsPrefix);
+        free(path); // Path is temporary, source read is persistent
+        // nsPrefix is persistent? Used in compileFile for CURRENT prefix.
+        // But tokens created will point to strings? 
+        // Fn name creation needs to allocate new Token string. 
+        // So nsPrefix can be freed if we use it to CREATE tokens properly.
+        // Wait, compileFile sets global `currentNamespacePrefix`.
+        // declaration() -> FunctionDecl uses it.
+        // If FunctionDecl keeps it, we can't free it yet?
+        // Actually, FunctionDecl parsing will use it to generated prefixed names.
+        // If we generate new strings, we are good.
+        // So we can free nsPrefix after compileFile returns?
+        // NO, if we implement recursive imports, we might need it? 
+        // compileFile uses it synchronously. So yes, free after return is safe.
+        
+        // BUT wait, for the Function Parsing, we need the prefix string to exist during parsing.
+        
+        consume(TOKEN_SEMICOLON, "Expect ';' after import.");
+        
+        // We return the Block containing library functions.
+        // The CodeGen will emit them.
+        return moduleBlock;
+    }
+
     // 1. Struct Declaration
     if (currentToken.type == TOKEN_STRUCT) {
         advance();
@@ -416,6 +557,22 @@ static AstNode* declaration() {
         advance();
         consume(TOKEN_IDENTIFIER, "Expect function name.");
         Token name = previousToken;
+        
+        // NAMESPACE PREFIXING
+        if (currentNamespacePrefix != NULL) {
+            // Create new name: Prefix + Name
+            int prefixLen = strlen(currentNamespacePrefix);
+            int totalLen = prefixLen + name.length;
+            char* newName = malloc(totalLen + 1);
+            memcpy(newName, currentNamespacePrefix, prefixLen);
+            memcpy(newName + prefixLen, name.start, name.length);
+            newName[totalLen] = '\0';
+            
+            // Hack Token to point to new string (Leaked intentionally for AST lifetime)
+            name.start = newName;
+            name.length = totalLen;
+            // Type stays IDENTIFIER
+        }
         
         consume(TOKEN_LEFT_PAREN, "Expect '(' after function name.");
         
