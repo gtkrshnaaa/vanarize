@@ -171,6 +171,16 @@ static AstNode* assignment() {
             node->value = value;
             return (AstNode*)node;
         }
+        else if (expr->type == NODE_INDEX_EXPR) {
+            IndexExpr* indexExpr = (IndexExpr*)expr;
+            IndexSetExpr* node = malloc(sizeof(IndexSetExpr));
+            node->main.type = NODE_INDEX_SET_EXPR;
+            node->array = indexExpr->array;
+            node->index = indexExpr->index;
+            node->value = value;
+             // Free the old IndexExpr shell if needed, but AST nodes are usually arena/pool allocated or leaked until end.
+            return (AstNode*)node;
+        }
         
         fprintf(stderr, "[Parser] Invalid assignment target.\n");
         exit(1);
@@ -274,7 +284,18 @@ static AstNode* call() {
             node->main.type = NODE_GET_EXPR;
             node->object = expr;
             node->name = name;
+            node->name = name;
             expr = (AstNode*)node;
+        } else if (currentToken.type == TOKEN_LEFT_BRACKET) {
+             advance();
+             AstNode* index = expression();
+             consume(TOKEN_RIGHT_BRACKET, "Expect ']' after index.");
+             
+             IndexExpr* node = malloc(sizeof(IndexExpr));
+             node->main.type = NODE_INDEX_EXPR;
+             node->array = expr;
+             node->index = index;
+             expr = (AstNode*)node;
         } else {
             break;
         }
@@ -376,6 +397,30 @@ static AstNode* primary() {
         AstNode* expr = expression();
         consume(TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
         return expr;
+    }
+    
+    if (currentToken.type == TOKEN_LEFT_BRACKET) {
+        advance();
+        AstNode** elements = malloc(sizeof(AstNode*) * 16); // Initial cap 16
+        int count = 0;
+        int capacity = 16;
+        
+        if (currentToken.type != TOKEN_RIGHT_BRACKET) {
+            do {
+                if (count >= capacity) {
+                    capacity *= 2;
+                    elements = realloc(elements, sizeof(AstNode*) * capacity);
+                }
+                elements[count++] = expression();
+            } while (currentToken.type == TOKEN_COMMA && (advance(), 1));
+        }
+        consume(TOKEN_RIGHT_BRACKET, "Expect ']' after array elements.");
+        
+        ArrayLiteral* node = malloc(sizeof(ArrayLiteral));
+        node->main.type = NODE_ARRAY_LITERAL;
+        node->elements = elements;
+        node->count = count;
+        return (AstNode*)node;
     }
     
     // Grouping, etc. omitted for briefness
@@ -553,6 +598,17 @@ static AstNode* declaration() {
         currentToken.type == TOKEN_TYPE_STRING) {
         typeToken = currentToken;
         advance();
+        
+        // Array Type Check: int[]
+        if (currentToken.type == TOKEN_LEFT_BRACKET) {
+            advance(); // Eat [
+            consume(TOKEN_RIGHT_BRACKET, "Expect ']' after '[' for array type."); // Eat ]
+            
+            // Extend typeToken to cover "int[]"
+            const char* end = previousToken.start + previousToken.length;
+            typeToken.length = (int)(end - typeToken.start);
+        }
+        
         return parseVarDecl(true, typeToken);
     }
     
@@ -562,6 +618,56 @@ static AstNode* declaration() {
          typeToken = currentToken;
          advance();
          return parseVarDecl(true, typeToken);
+    }
+
+   // Struct Array Type: MyStruct[] varName
+    if (currentToken.type == TOKEN_IDENTIFIER && nextToken.type == TOKEN_LEFT_BRACKET) {
+        // Peek ahead to ensure it's not array access? No, declaration context.
+        // It could be 'MyStruct[] name'.
+        // Or 'var[idx] = ...' (Statement).
+        // statement() handles assignment. declaration() handles declarations.
+        // If we are here, we expect a declaration.
+        // But 'MyStruct[0] = 1' is a statement.
+        // Ambiguity?
+        // declaration() logic handles: import, struct, var, functions, statements.
+        // Wait, standard C: 'ID ID' is declaration. 'ID[...]' is statement start.
+        // Unnarize: 'Variable must be declared'.
+        // If we see 'Type[] ID', it's a declaration.
+        // If we see 'ID[...]', it's a statement.
+        // We need 3-token lookahead? 
+        // Current: current=Type, next=[.
+        // If next-next is ']', it's array type.
+        // Lexer provides 'nextToken'. We don't have nextNextToken.
+        // We can peek more? Parser has 'scanNext'.
+        // But `nextToken` is 1 lookahead.
+        // We can hack: check if nextToken is [ and assume array type IF...
+        // Wait. `Parser.c` parses statements at the end of declaration()?
+        // No, `block->statements` contains declarations.
+        // In `declaration()`: if not specific keyword, checks Types.
+        // Fallback: `return statement();`
+        
+        // If we implement Struct Arrays:
+        // We need to distinguish `Struct[] x` from `x[0] = 1`.
+        // `Struct` is TOKEN_IDENTIFIER. `x` is TOKEN_IDENTIFIER.
+        // `x` is TOKEN_IDENTIFIER. `[` is TOKEN_LEFT_BRACKET.
+        
+        // If identifiers are types...
+        // Masterplan says: PascalCase for Types. camelCase for vars.
+        // We *could* enforce this?
+        // But simpler: 'Type[]' requires ']' immediately.
+        // 'Var[' requires expression.
+        
+        // Implementation Limitation: For now, only Primitive Arrays supported easily.
+        // Or we assume that if we see "ID [ ] ID", it is declaration.
+         
+         // Let's stick to primitive arrays for this Step implementation if tricky.
+         // Masterplan enforces explicit typing.
+         // I'll leave Struct Array support for now or implement simplistic check:
+         // If `ID [ ]` -> it is array type.
+         // If `ID [ expr ]` -> statement.
+         // We can't see past `[`.
+         // Unless we speculatively parse brackets?
+         // Leave it for now. Primitives are priority.
     }
 
     // MASTERPLAN: async function support
