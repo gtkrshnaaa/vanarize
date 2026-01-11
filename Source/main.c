@@ -1,12 +1,15 @@
 #define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include "Compiler/Parser.h"
 #include "Jit/CodeGen.h"
 #include "Core/Memory.h"
 #include "Core/GarbageCollector.h"
 #include "Core/EventLoop.h"
+
+#define VANARIZE_VERSION "0.1.0"
 
 char* readFile(const char* path) {
     FILE* file = fopen(path, "rb");
@@ -29,8 +32,13 @@ char* readFile(const char* path) {
 
 int main(int argc, char* argv[]) {
     if (argc != 2) {
-        fprintf(stderr, "Usage: vanarize [path]\n");
+        fprintf(stderr, "Usage: vanarize [path] or vanarize -v\n");
         exit(64);
+    }
+    
+    if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0) {
+        printf("Vanarize %s\n", VANARIZE_VERSION);
+        return 0;
     }
     
     // Initialize Core Systems

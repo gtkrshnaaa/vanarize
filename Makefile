@@ -38,8 +38,20 @@ test: $(TEST_TARGET)
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET) $(TEST_TARGET)
 
+# Install
+install: clean all
+	@echo "Installing $(TARGET) to /usr/local/bin..."
+	@cp $(TARGET) /usr/local/bin/$(TARGET)
+	@echo "Optimization installed successfully. Run '$(TARGET) -v' to verify."
+
+# Uninstall
+uninstall:
+	@echo "Uninstalling $(TARGET) from /usr/local/bin..."
+	@rm -f /usr/local/bin/$(TARGET)
+	@echo "Uninstalled successfully."
+
 # Phony Targets
-.PHONY: all clean test
+.PHONY: all clean test install uninstall
 
 # Include Dependencies
 -include $(DEPS)
