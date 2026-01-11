@@ -1,0 +1,33 @@
+function Main() {
+    print("Testing Arrays...");
+    
+    // Literal
+    int[] arr = [10, 20, 30]; 
+    print("Initial Length: " + arr.length());
+    print("Index 1: " + arr[1]);
+    
+    // Set
+    arr[1] = 99;
+    print("New Index 1: " + arr[1]);
+    
+    // Push
+    arr.push(40);
+    print("Pushed 40. Length: " + arr.length());
+    print("Last: " + arr[3]);
+    
+    // Pop
+    int p = arr.pop();
+    print("Popped: " + p);
+    print("Length after pop: " + arr.length());
+    
+    // Stress & GC
+    print("Stress Testing...");
+    int[] list = [];
+    for (int i = 0; i < 1000; i = i + 1) {
+        list.push(i);
+    }
+    print("List size: " + list.length());
+    print("List[500]: " + list[500]);
+    
+    print("Done.");
+}
