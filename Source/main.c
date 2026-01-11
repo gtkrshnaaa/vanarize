@@ -43,6 +43,7 @@ int main(int argc, char* argv[]) {
     
     // Initialize Core Systems
     VM_InitMemory();
+    GC_Init(&argc); // Initialize GC with stack bottom
     EventLoop_Init();
     // Jit_Init(); // Initialized internally or not needed if stateless
     
