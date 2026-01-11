@@ -110,7 +110,7 @@ Vanarize strictly implements standard primitive types for maximum compatibility 
 
 String concatenation uses the `+` operator. Supporting types are converted to `string` implicitly during concatenation.
 
-```javascript
+```vana
 // Variable: camelCase
 int coreCount = 8
 double clockSpeed = 3.5
@@ -125,7 +125,7 @@ string status = "CPU: " + cpuName + " has " + coreCount + " cores at " + clockSp
 
 Classes are rejected in favor of POD (Plain Old Data) Structs.
 
-```javascript
+```vana
 // Struct: PascalCase
 struct NetworkConfig {
     string hostAddress
@@ -139,7 +139,7 @@ struct NetworkConfig {
 
 Loops adhere strictly to the C-style iteration paradigm.
 
-```javascript
+```vana
 // Iteration
 for (int i = 0; i < 1000; i++) {
     // Logic here
@@ -158,7 +158,7 @@ if (i > 500) {
 
 Declared with `function`, PascalCase naming, and `::` return type syntax.
 
-```javascript
+```vana
 // Function Definition
 function CalculateVector(double x, double y) :: double {
     return x * y
@@ -175,7 +175,7 @@ function PrintStatus(string msg) {
 
 Imports are relative. The filename becomes the Namespace identifier.
 
-```javascript
+```vana
 // Imports "Libs/MathUtils.vana" as namespace "MathUtils"
 import "./Libs/MathUtils.vana"
 
@@ -287,7 +287,7 @@ The following code demonstrates the syntactical strictness and capabilities of V
 
 **File:** `Main.vana`
 
-```javascript
+```vana
 
 // Struct Definition (PascalCase)
 struct SensorData {
