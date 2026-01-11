@@ -1,0 +1,33 @@
+// AllocStress.vana
+// Benchmark for memory allocation throughput (Bump Pointer verification)
+
+struct Point {
+    double x
+    double y
+    double z
+}
+
+function Main() {
+    print("Starting Allocation Stress Test...");
+    
+    int iterations = 100000;
+    long start = StdTime.Now();
+    
+    for (int i = 0; i < iterations; i = i + 1) {
+        Point p = {
+            x: 1.0,
+            y: 2.0,
+            z: 3.0
+        };
+    }
+    
+    long end = StdTime.Now();
+    long duration = end - start;
+    
+    print("Allocated " + iterations + " objects.");
+    print("Time taken: " + duration + " ns");
+    
+    double sec = duration / 1000000000.0;
+    double ops = iterations / sec;
+    print("Throughput: " + ops + " allocs/sec");
+}
