@@ -19,4 +19,7 @@ void GC_RegisterRoot(Value* root);
 // Remove a root location
 void GC_UnregisterRoot(Value* root);
 
+// Allocates an object and registers it with the GC
+void* GC_Allocate(size_t size);
+
 #endif // VANARIZE_CORE_GC_H
