@@ -64,6 +64,9 @@ Value Runtime_Add(Value a, Value b) {
         free(chars);
         return ObjToValue((Obj*)res);
     }
+    
+    // Fallback: incompatible types
+    return VAL_NULL;
 }
 
 Value Runtime_Equal(Value a, Value b) {
