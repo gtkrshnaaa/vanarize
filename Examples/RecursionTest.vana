@@ -1,9 +1,9 @@
-function Factorial(number n) :: number {
+function Factorial(int n) :: int {
     if (n <= 1) return 1;
     return n * Factorial(n - 1);
 }
 
 function Main() {
-    number result = Factorial(5);
+    int result = Factorial(5);
     print(result);
 }

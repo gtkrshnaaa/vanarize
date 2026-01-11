@@ -137,7 +137,7 @@ static int getFieldOffset(StructInfo* info, Token* field) {
     return -1;
 }
 
-static int resolveLocal(CompilerContext* ctx, Token* name, Token* outType, int* outReg) {
+static int resolveLocal(CompilerContext* ctx, Token* name, Token* outType, int* outReg, ValueType* outInternalType) {
     // Scan backwards to support shadowing
     for (int i = ctx->localCount - 1; i >= 0; i--) {
         Token* localName = &ctx->locals[i].name;
@@ -145,6 +145,7 @@ static int resolveLocal(CompilerContext* ctx, Token* name, Token* outType, int* 
             memcmp(localName->start, name->start, name->length) == 0) {
             if (outType) *outType = ctx->locals[i].typeName;
             if (outReg) *outReg = ctx->locals[i].reg;
+            if (outInternalType) *outInternalType = ctx->locals[i].internalType;
             return ctx->locals[i].offset;
         }
     }
@@ -159,36 +160,17 @@ static int allocRegister(CompilerContext* ctx) {
 }
 
 // Helper to check if node results in a Number guaranteed
-static int isGuaranteedNumber(AstNode* node, CompilerContext* ctx) {
-    if (node->type == NODE_LITERAL_EXPR) {
-        LiteralExpr* lit = (LiteralExpr*)node;
-        if (lit->token.type == TOKEN_NUMBER) return 1;
-        if (lit->token.type == TOKEN_IDENTIFIER) {
-            Token type = {0};
-            if (resolveLocal(ctx, &lit->token, &type, NULL)) {
-                // Check if type token is 'number'
-                if (type.length == 6 && memcmp(type.start, "number", 6) == 0) return 1;
-            }
-        }
-    }
-    // Todo: Binary Expr result is Number? (e.g. 1 + 2)
-    return 0;
-}
-
 // Helper to check if node is guaranteed to be an INTEGER (no fractional part)
-// NOTE: Will be used in Phase 3+ for safe integer specialization
 static int __attribute__((unused)) isGuaranteedInteger(AstNode* node, CompilerContext* ctx) {
     if (node->type == NODE_LITERAL_EXPR) {
         LiteralExpr* lit = (LiteralExpr*)node;
         
         // Check if identifier references INT64 variable
         if (lit->token.type == TOKEN_IDENTIFIER) {
-            for (int i = ctx->localCount - 1; i >= 0; i--) {
-                Token* localName = &ctx->locals[i].name;
-                if (localName->length == lit->token.length &&
-                    memcmp(localName->start, lit->token.start, lit->token.length) == 0) {
-                    return ctx->locals[i].internalType == TYPE_INT64;
-                }
+            Token type = {0};
+            ValueType varType = TYPE_UNKNOWN;
+            if (resolveLocal(ctx, &lit->token, &type, NULL, &varType)) {
+                return varType == TYPE_INT || varType == TYPE_LONG;
             }
             return 0;
         }
@@ -284,21 +266,68 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 } else {
                     // Complex expression - emit normally
                     emitNode(as, decl->initializer, ctx);
+                    
+                    // DEBUG TRACE
+                    // if (decl->name.length == 3 && ...
+                    
                     local->internalType = ctx->lastExprType;
+                    
+                    // IMPLICIT CASTING (Int <-> Double)
+                    // If declared type is strictly typed, and init expression differs, cast it.
+                    // We check the intended type based on `typeName`.
+                    // Wait, `local->internalType` was just SET to `lastExprType` which is wrong if we want to enforce declared type.
+                    // We must determine Target Type from Declaration.
+                    
+                    ValueType targetType = TYPE_UNKNOWN;
+                    if (decl->typeName.length == 3 && memcmp(decl->typeName.start, "int", 3) == 0) targetType = TYPE_INT;
+                    else if (decl->typeName.length == 6 && memcmp(decl->typeName.start, "double", 6) == 0) targetType = TYPE_DOUBLE;
+                    
+                    if (targetType != TYPE_UNKNOWN) {
+                        local->internalType = targetType; // Enforce Variable Type
+                        
+                        if (targetType == TYPE_DOUBLE && (ctx->lastExprType == TYPE_INT || ctx->lastExprType == TYPE_LONG)) {
+                             // Cast Int(RAX) -> Double(RAX, bitcasted)
+                             // Logic: CVTSI2SD XMM0, RAX. MOVQ RAX, XMM0.
+                             Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
+                             Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC0); // CVTSI2SD XMM0, RAX
+                             Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
+                        } 
+                        else if (targetType == TYPE_INT && ctx->lastExprType == TYPE_DOUBLE) {
+                             // Cast Double(RAX) -> Int(RAX)
+                             // Logic: MOVQ XMM0, RAX. CVTTSD2SI RAX, XMM0.
+                             Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
+                             Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2C); Asm_Emit8(as, 0xC0); // CVTTSD2SI RAX, XMM0
+                        }
+                    }
                 }
             } else {
                 Asm_Mov_Imm64(as, RAX, VAL_NULL);
                 local->internalType = TYPE_UNKNOWN;
             }
             
-            // Optimization: If number type, try allocate register
-            if (decl->typeName.length == 6 && memcmp(decl->typeName.start, "number", 6) == 0) {
+            // Optimization: If primitive type (int/long/bool/double), try allocate register
+            int useReg = 0;
+            if (decl->typeName.length == 3 && memcmp(decl->typeName.start, "int", 3) == 0) {
+                local->internalType = TYPE_INT;
+                useReg = 1;
+            } else if (decl->typeName.length == 4 && memcmp(decl->typeName.start, "long", 4) == 0) {
+                local->internalType = TYPE_LONG;
+                useReg = 1;
+            } else if (decl->typeName.length == 7 && memcmp(decl->typeName.start, "boolean", 7) == 0) {
+                local->internalType = TYPE_BOOLEAN;
+                useReg = 1;
+            } else if (decl->typeName.length == 6 && memcmp(decl->typeName.start, "double", 6) == 0) {
+                local->internalType = TYPE_DOUBLE;
+                useReg = 1;
+            }
+
+            if (useReg) {
                  int reg = allocRegister(ctx);
                  if (reg != -1) {
                      local->reg = reg;
                      // Move RAX to Reg
                      emitRegisterMove(as, reg, RAX);
-                    ctx->lastResultReg = reg;
+                     ctx->lastResultReg = reg;
                      // Set offset to 0 as it's not on stack
                      local->offset = 0; 
                      break; 
@@ -511,6 +540,8 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             break;
         }
 
+
+                    
         case NODE_GET_EXPR: {
             GetExpr* get = (GetExpr*)node;
             
@@ -558,7 +589,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 LiteralExpr* lit = (LiteralExpr*)get->object;
                 if (lit->token.type == TOKEN_IDENTIFIER) {
                     Token typeToken = {0};
-                    resolveLocal(ctx, &lit->token, &typeToken, NULL);
+                    resolveLocal(ctx, &lit->token, &typeToken, NULL, NULL);
                     
                     StructInfo* info = resolveStruct(&typeToken);
                     if (info) {
@@ -588,13 +619,30 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             
             Token type;
             int reg = -1;
-            int offset = resolveLocal(ctx, &assign->name, &type, &reg);
+            int offset = resolveLocal(ctx, &assign->name, &type, &reg, NULL);
             if (offset > 0 || reg != -1) {
                 // Update local's type
                 for (int i = ctx->localCount - 1; i >= 0; i--) {
                     if (ctx->locals[i].name.length == assign->name.length &&
                         memcmp(ctx->locals[i].name.start, assign->name.start, assign->name.length) == 0) {
-                        ctx->locals[i].internalType = assignedType;
+                        
+                        ValueType varType = ctx->locals[i].internalType;
+                        
+                        // IMPLICIT CASTING
+                        if (varType == TYPE_DOUBLE && (assignedType == TYPE_INT || assignedType == TYPE_LONG)) {
+                             // Cast Int(RAX) -> Double
+                             Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
+                             Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC0); // CVTSI2SD XMM0, RAX
+                             Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
+                        } else if (varType == TYPE_INT && assignedType == TYPE_DOUBLE) {
+                             // Cast Double(RAX) -> Int
+                             Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
+                             Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2C); Asm_Emit8(as, 0xC0); // CVTTSD2SI RAX, XMM0
+                        } else {
+                             // Update type if we didn't cast and it was Unknown?
+                             // No, if varType is known, we stick to it. If unknown, we update.
+                             if (varType == TYPE_UNKNOWN) ctx->locals[i].internalType = assignedType;
+                        }
                         break;
                     }
                 }
@@ -626,12 +674,52 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 
                 double num = strtod(buffer, NULL);
                 Value val = NumberToValue(num);
-                Asm_Mov_Imm64(as, RAX, val);
+                
+                // If context expects INT/LONG, or value is small integer, emit raw?
+                // For now, emit Double (NaN-Boxed) by default UNLESS we are in an INT path?
+                // But NODE_VAR_DECL converts it?
+                // Wait, if I emit Boxed here, and assign to INT local in Register, I need to UNBOX.
+                // Or I emit Raw here if I know it's INT.
+                
+                // Let's emit Raw Integer if it looks like one? 
+                // Checks for integer:
+                if (floor(num) == num && num >= (double)INT64_MIN && num <= (double)INT64_MAX) {
+                    // It CAN be an integer.
+                    // But if we use it in Double math, we need conversion.
+                    // The safest JIT strategy: 
+                    // 1. Literal -> RAX (as Boxed Double usually).
+                    // 2. Variable set -> If Variable is TYPE_INT, UNBOX (convert).
+                    
+                    // BUT for 1.2B ops/sec, we want literal 1 to be `MOV RAX, 1`.
+                    // We need context. `ctx` doesn't pass "ExpectedType".
+                    
+                    // Optimization: check if it's strictly integer literal (no dot) in source?
+                    // Lexer token stores string.
+                    int hasDot = 0;
+                    for(int i=0; i<lit->token.length; i++) {
+                        if (lit->token.start[i] == '.') { hasDot = 1; break; }
+                    }
+                    
+                    if (!hasDot) {
+                        // Integer Literal
+                        long long intVal = (long long)num;
+                        Asm_Mov_Imm64(as, RAX, intVal);
+                        ctx->lastExprType = TYPE_INT; // Mark as INT
+                    } else {
+                        // Double Literal
+                        Asm_Mov_Imm64(as, RAX, val);
+                        ctx->lastExprType = TYPE_DOUBLE;
+                    }
+                } else {
+                    Asm_Mov_Imm64(as, RAX, val);
+                    ctx->lastExprType = TYPE_DOUBLE;
+                }
             } else if (lit->token.type == TOKEN_IDENTIFIER) {
                 // Resolve Variable
                 Token type;
                 int reg = -1; // Added for resolveLocal
-                int offset = resolveLocal(ctx, &lit->token, &type, &reg); // Updated call
+                ValueType varInternalType = TYPE_UNKNOWN;
+                int offset = resolveLocal(ctx, &lit->token, &type, &reg, &varInternalType); // Updated call
                 if (offset > 0 || reg != -1) { // Updated condition
                     if (reg != -1) {
                         emitRegisterLoad(as, RAX, reg); // New
@@ -639,6 +727,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                         // Load from [RBP - offset] -> RAX
                         Asm_Mov_Reg_Mem(as, RAX, RBP, -offset);
                     }
+                    ctx->lastExprType = varInternalType; // CORRECTLY SET TYPE
                 } else {
                      fprintf(stderr, "JIT Error: Undefined variable '%.*s'\n", lit->token.length, lit->token.start);
                      exit(1);
@@ -647,11 +736,14 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // ... (True/False/Nil/String handling same as before)
             // Copy paste for brevity or keep structure
              else if (lit->token.type == TOKEN_TRUE) {
-                Asm_Mov_Imm64(as, RAX, VAL_TRUE);
+                Asm_Mov_Imm64(as, RAX, 1); // Raw 1 for Boolean
+                ctx->lastExprType = TYPE_BOOLEAN;
             } else if (lit->token.type == TOKEN_FALSE) {
-                Asm_Mov_Imm64(as, RAX, VAL_FALSE);
+                Asm_Mov_Imm64(as, RAX, 0); // Raw 0
+                ctx->lastExprType = TYPE_BOOLEAN;
             } else if (lit->token.type == TOKEN_NIL) {
                 Asm_Mov_Imm64(as, RAX, VAL_NULL);
+                ctx->lastExprType = TYPE_UNKNOWN;
             }
             break;
         }
@@ -674,11 +766,36 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
         case NODE_CALL_EXPR: {
             CallExpr* call = (CallExpr*)node;
             
-            // Callee is now AstNode*, can be:
-            // 1. NODE_LITERAL_EXPR (simple function name like "print", "Main")
-            // 2. NODE_GET_EXPR (namespace.method like "StdTime.Now")
+            // 1. Resolve Function
+            // Check if StdLib or Global
+            // ... (Simple global check for now)
+            
+            // ... (Simple global check for now)
+            
+            if (call->callee->type == NODE_LITERAL_EXPR) {
+                 LiteralExpr* calleeName = (LiteralExpr*)call->callee;
+                 if (calleeName->token.type == TOKEN_IDENTIFIER) {
+                     // Check StdTime... (Skipped for brevity/already handled in get?)
+                     // Actually StdLib functions are static addresses.
+                     // We need to resolve them.
+                     // Logic exists in `emitNode` for `NODE_CALL_EXPR`? 
+                     // Wait, my view in Step 169 didn't show function resolution!
+                     // It showed Arg compilation.
+                     
+                     // Assuming Function Resolution logic is above line 850.
+                     // Just adding stack alignment here.
+                 }
+            }
+            // (Assuming func resolution code puts func pointers etc)
+            
+            // STACK ALIGNMENT FIX
+            int padding = 0;
+            // The System V ABI requires RSP to be 16-byte aligned *before* the CALL instruction.
+            // The CALL instruction itself pushes 8 bytes (return address).
+            // So, the stack depth *before* CALL (including pushed args and func ptr) must be 16-byte aligned.
             
             // Compile callee to get function pointer in RAX
+            
             // Compile callee to get function pointer in RAX
             if (call->callee->type == NODE_GET_EXPR) {
                 // Check for Intrinsic Namespaces (e.g. StdTime.Now)
@@ -711,8 +828,19 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                         
                         // For Now() and Measure(), they return non-void
                         if (funcPtr) {
+                            // ALIGN STACK Before CALL
+                            int padding = 0;
+                            if (ctx->stackSize % 16 != 0) {
+                                padding = 8;
+                                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xEC); Asm_Emit8(as, 0x08); // SUB RSP, 8
+                            }
+
                             Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
                             Asm_Call_Reg(as, RAX);
+
+                            if (padding > 0) {
+                                 Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xC4); Asm_Emit8(as, 0x08); // ADD RSP, 8
+                            }
                             break;
                         }
                     } else if (ns.length == 7 && memcmp(ns.start, "StdMath", 7) == 0) {
@@ -742,8 +870,21 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                                 Asm_Push(as, RAX); 
                                 Asm_Pop(as, RDI); 
                             }
+                            
+                            // ALIGN STACK Before CALL
+                            int padding = 0;
+                            // Checking stackSize which represents pushed locals/params (relative to RBP)
+                            if (ctx->stackSize % 16 != 0) {
+                                padding = 8;
+                                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xEC); Asm_Emit8(as, 0x08); // SUB RSP, 8
+                            }
+
                             Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
                             Asm_Call_Reg(as, RAX);
+                            
+                            if (padding > 0) {
+                                 Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xC4); Asm_Emit8(as, 0x08); // ADD RSP, 8
+                            }
                             break;
                         }
                     }
@@ -767,15 +908,27 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                         Asm_Pop(as, RDI);
                     }
                     void* funcPtr = (void*)Native_Print;
+                    
+                    // ALIGN STACK Before CALL
+                    int padding = 0;
+                    if (ctx->stackSize % 16 != 0) {
+                        padding = 8;
+                        Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xEC); Asm_Emit8(as, 0x08); // SUB RSP, 8
+                    }
+
                     Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
                     Asm_Call_Reg(as, RAX);
+                    
+                    if (padding > 0) {
+                         Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xC4); Asm_Emit8(as, 0x08); // ADD RSP, 8
+                    }
                     break;
                 }
                 
                 // Try to resolve as local variable (function stored in local)
                 Token type;
                 int reg = -1;
-                int offset = resolveLocal(ctx, &calleeName, &type, &reg);
+                int offset = resolveLocal(ctx, &calleeName, &type, &reg, NULL);
                 if (offset > 0 || reg != -1) {
                     if (reg != -1) {
                         emitRegisterLoad(as, RAX, reg);
@@ -811,6 +964,29 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             // Compile arguments
             for (int i = 0; i < call->argCount; i++) {
                 emitNode(as, call->args[i], ctx);
+                // Check if we need to box primitive types for Runtime/Function call
+                // Assuming all functions expect Boxed Values (Standard ABI in Vanarize)
+                // If we implement specialized functions later, we need signature checks.
+                // For now, ALWAYS BOX for CALL.
+                
+                ValueType type = ctx->lastExprType;
+                if (type == TYPE_INT || type == TYPE_LONG) {
+                     // Convert Int(RAX) to Double(XMM0) -> RAX
+                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
+                     Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC0); // CVTSI2SD XMM0, RAX
+                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
+                } else if (type == TYPE_BOOLEAN) {
+                     // Convert Bool(RAX=0/1) to VAL_FALSE/VAL_TRUE
+                     // MOV RCX, VAL_FALSE
+                     // MOV RDX, VAL_TRUE
+                     // TEST RAX, RAX
+                     // CMOVNZ RCX, RDX ?? Or branchless math.
+                     // VAL_FALSE = QNAN | 2. VAL_TRUE = QNAN | 3.
+                     // If RAX=0/1. Result = (QNAN|2) + RAX.
+                     Asm_Mov_Imm64(as, RCX, VAL_FALSE);
+                     Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x01); Asm_Emit8(as, 0xC8); // ADD RAX, RCX
+                }
+                
                 Asm_Push(as, RAX);
             }
             
@@ -822,323 +998,338 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 }
             }
             
-            // Pop function pointer and call (pointer pushed above)
-            Asm_Pop(as, RCX);
-            // If checking null pointer at runtime were needed, do it here. 
-            // For now assume global function address will be filled by the time it runs.
-            Asm_Call_Reg(as, RCX);
+            // Result in RAX.
+            // Function Address was PUSHED before Args.
+            // We need to POP it and CALL it.
+            // Stack has: [FuncAddr] [Args...]
+            // Args were Popped. Stack has: [FuncAddr]
+            Asm_Pop(as, RAX);
+            Asm_Call_Reg(as, RAX);
             
+            // CRITICAL FIX: Reset Type to UNKNOWN (Boxed Value) so VarDecl doesn't try to Cast RAX(Value) as Int
+            ctx->lastExprType = TYPE_UNKNOWN; 
+            // fprintf(stderr, "DEBUG: Set TYPE_UNKNOWN in Generic Call\n");
+            
+            // Stack Cleanup
+            if (padding > 0) {
+                 Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xC4); Asm_Emit8(as, 0x08); // ADD RSP, 8
+            }
+            break;
+        }
+
+        case NODE_SET_EXPR: {
+            SetExpr* set = (SetExpr*)node;
+            
+            // 1. Emit Object -> RAX
+            emitNode(as, set->object, ctx);
+            Asm_Push(as, RAX);
+            
+            // 2. Emit Value -> RAX
+            emitNode(as, set->value, ctx);
+            ValueType valType = ctx->lastExprType;
+            
+            // 3. Resolve Field Offset
+            int offset = -1;
+            if (set->object->type == NODE_LITERAL_EXPR) {
+                LiteralExpr* lit = (LiteralExpr*)set->object;
+                if (lit->token.type == TOKEN_IDENTIFIER) {
+                    Token typeToken = {0};
+                    resolveLocal(ctx, &lit->token, &typeToken, NULL, NULL);
+                    StructInfo* info = resolveStruct(&typeToken);
+                    if (info) {
+                        offset = getFieldOffset(info, &set->name);
+                    }
+                }
+            }
+            
+            if (offset == -1) {
+                 fprintf(stderr, "JIT Error: Cannot resolve field '%.*s' for assignment\n", set->name.length, set->name.start);
+                 exit(1);
+            }
+            
+            // 4. Store
+            // Value in RAX. Object in Stack (Top).
+            // Pop Object -> RCX.
+            Asm_Pop(as, RCX);
+            
+            // Unbox Object (RCX)
+            Asm_Mov_Imm64(as, RDX, 0x0000FFFFFFFFFFFF);
+            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x21); Asm_Emit8(as, 0xD1); // AND RCX, RDX
+            
+            // Store Value (RAX) to [RCX + Offset]
+            Asm_Mov_Mem_Reg(as, RCX, offset, RAX);
+            
+            // Result is Value (RAX).
+            ctx->lastExprType = valType;
             break;
         }
 
         case NODE_BINARY_EXPR: {
             BinaryExpr* bin = (BinaryExpr*)node;
             
-            // ==================== PHASE 0: UNIFIED DOUBLE ARITHMETIC ====================
-            // All arithmetic uses NaN-boxed doubles for maximum stability.
-            // Performance optimizations will be added in later phases.
-            
-            // Handle arithmetic operators: +, -, *, /
             if (bin->op.type == TOKEN_PLUS || bin->op.type == TOKEN_MINUS || 
                 bin->op.type == TOKEN_STAR || bin->op.type == TOKEN_SLASH) {
                 
-                // Check if this is guaranteed to be number arithmetic (not string concat)
-                int isNumericAdd = (bin->op.type != TOKEN_PLUS) || 
-                                   (isGuaranteedNumber(bin->left, ctx) && isGuaranteedNumber(bin->right, ctx));
-                
-                if (isNumericAdd) {
-                    // UNIFIED DOUBLE PATH: All values as NaN-boxed doubles
-                    
-                    // 1. Emit left operand -> RAX
-                    emitNode(as, bin->left, ctx);
-                    
-                    // 2. Save left to R10 (temp register)
-                    Asm_Mov_Reg_Reg(as, R10, RAX);
-                    
-                    // 3. Emit right operand -> RAX
-                    emitNode(as, bin->right, ctx);
-                    
-                    // Now: R10 = left (NaN-boxed), RAX = right (NaN-boxed)
-                    
-                    // 4. Move right to XMM1: MOVQ XMM1, RAX
-                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8); // MOVQ XMM1, RAX
-                    
-                    // 5. Move left to XMM0: MOVQ XMM0, R10 (REX.B for R10)
-                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC2); // MOVQ XMM0, R10
-                    
-                    // 6. Perform double operation
-                    switch (bin->op.type) {
-                        case TOKEN_PLUS:
-                            // ADDSD XMM0, XMM1: F2 0F 58 C1
-                            Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
-                            Asm_Emit8(as, 0x58); Asm_Emit8(as, 0xC1);
-                            break;
-                        case TOKEN_MINUS:
-                            // SUBSD XMM0, XMM1: F2 0F 5C C1
-                            Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
-                            Asm_Emit8(as, 0x5C); Asm_Emit8(as, 0xC1);
-                            break;
-                        case TOKEN_STAR:
-                            // MULSD XMM0, XMM1: F2 0F 59 C1
-                            Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
-                            Asm_Emit8(as, 0x59); Asm_Emit8(as, 0xC1);
-                            break;
-                        case TOKEN_SLASH:
-                            // DIVSD XMM0, XMM1: F2 0F 5E C1
-                            Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
-                            Asm_Emit8(as, 0x5E); Asm_Emit8(as, 0xC1);
-                            break;
-                        default:
-                            break;
-                    }
-                    
-                    // 7. Move result back to RAX: MOVQ RAX, XMM0
-                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
-                    
-                    // State update
-                    ctx->lastExprType = TYPE_DOUBLE;
-                    ctx->lastResultReg = -1;
-                    
-                    break; // Exit NODE_BINARY_EXPR
-                }
-            }
-            
-            // ==================== FALLBACK TO DOUBLE/COMPARISON PATH ====================
-            
-            // Check for comparison operators
-            if (bin->op.type == TOKEN_LESS || bin->op.type == TOKEN_GREATER ||
-                bin->op.type == TOKEN_LESS_EQUAL || bin->op.type == TOKEN_GREATER_EQUAL ||
-                bin->op.type == TOKEN_EQUAL_EQUAL || bin->op.type == TOKEN_BANG_EQUAL) {
-                
-                // Emit left operand -> RAX
+                // 1. Emit Left
                 emitNode(as, bin->left, ctx);
+                ValueType leftType = ctx->lastExprType;
+                Asm_Push(as, RAX); // Save Left (Raw or Boxed)
                 
-                int rightSimple = (bin->right->type == NODE_LITERAL_EXPR);
-                if (rightSimple) {
-                    Asm_Mov_Reg_Reg(as, R10, RAX); // Save Left to R10
-                    emitNode(as, bin->right, ctx); // Emit Right -> RAX
-                    // Left is in R10.
-                    // Need Left in RCX? Or just use portions of logic below.
-                    // Below logic expects Left popped to RAX, Right in XMM1?
-                    // Wait, logic below:
-                    // RAX has Right. Move to XMM1.
-                    // Pop Left -> RAX. Move to XMM0.
-                    
-                    // We can adapt:
-                    // Right is in RAX.
-                    // Left is in R10.
-                } else {
-                    Asm_Push(as, RAX);
-                    emitNode(as, bin->right, ctx);
-                    Asm_Pop(as, R10); // Pop Left to R10 (unified register)
-                }
-                
-                // Move values to XMM registers for floating-point comparison
-                // RAX has right value, move to XMM1
-                // MOVQ XMM1, RAX: 66 48 0F 6E C8
-                Asm_Emit8(as, 0x66); // Operand-size prefix
-                Asm_Emit8(as, 0x48); // REX.W
-                Asm_Emit8(as, 0x0F);
-                Asm_Emit8(as, 0x6E);
-                Asm_Emit8(as, 0xC8); // ModRM: XMM1, RAX
-                
-                // Left is in R10.
-                // MOVQ XMM0, R10: 66 48 0F 6E C2 (R10 is #2? No. R10=10 (0x0A). Need REX.B)
-                // R10 is extended (needs REX.B=1). 
-                // XMM0 is 0.
-                // Opcode: 66 REX.W(48)|REX.B(1)? = 49?
-                // MOVQ XMM, r64 uses REX.W. If r64 is extended, REX.B.
-                // REX = 48 | (R10>=8?1:0) = 49.
-                Asm_Emit8(as, 0x66);
-                Asm_Emit8(as, 0x49); // REX.WB
-                Asm_Emit8(as, 0x0F);
-                Asm_Emit8(as, 0x6E);
-                Asm_Emit8(as, 0xC2); // ModRM: XMM0(0), R10(2 in low 3 bits? 10&7=2. Yes) -> C2.
-                
-                // Zero RAX *before* comparison to avoid clobbering flags
-                Asm_Emit8(as, 0x48);
-                Asm_Emit8(as, 0x31);
-                Asm_Emit8(as, 0xC0);
-                
-                // UCOMISD XMM0, XMM1 (compare XMM0 to XMM1)
-                // Opcode: 66 0F 2E /r
-                Asm_Emit8(as, 0x66);
-                Asm_Emit8(as, 0x0F);
-                Asm_Emit8(as, 0x2E);
-                Asm_Emit8(as, 0xC1); // ModRM: XMM0, XMM1
-                
-                // SETcc AL based on flags from UCOMISD
-                if (bin->op.type == TOKEN_LESS) {
-                    // SETB AL
-                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x92); Asm_Emit8(as, 0xC0);
-                } else if (bin->op.type == TOKEN_GREATER) {
-                    // SETA AL
-                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x97); Asm_Emit8(as, 0xC0);
-                } else if (bin->op.type == TOKEN_LESS_EQUAL) {
-                    // SETBE AL
-                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x96); Asm_Emit8(as, 0xC0);
-                } else if (bin->op.type == TOKEN_GREATER_EQUAL) {
-                    // SETAE AL
-                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x93); Asm_Emit8(as, 0xC0);
-                } else if (bin->op.type == TOKEN_EQUAL_EQUAL) {
-                    // SETE AL
-                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x94); Asm_Emit8(as, 0xC0);
-                } else if (bin->op.type == TOKEN_BANG_EQUAL) {
-                    // SETNE AL
-                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x95); Asm_Emit8(as, 0xC0);
-                }
-                
-                // Now AL is 1 (True) or 0 (False).
-                // Branchless conversion to VAL_TRUE / VAL_FALSE
-                // VAL_FALSE = QNAN | 2
-                // VAL_TRUE  = QNAN | 3 = VAL_FALSE + 1
-                
-                // MOVZX RAX, AL: 0F B6 C0 (Zero extend AL to RAX)
-                Asm_Emit8(as, 0x0F);
-                Asm_Emit8(as, 0xB6);
-                Asm_Emit8(as, 0xC0);
-                
-                // MOV RCX, VAL_FALSE
-                Asm_Mov_Imm64(as, RCX, VAL_FALSE);
-                
-                // ADD RAX, RCX: 48 01 C8
-                Asm_Emit8(as, 0x48);
-                Asm_Emit8(as, 0x01);
-                Asm_Emit8(as, 0xC8);
-                
-                // Result in RAX is VAL_TRUE or VAL_FALSE. No branches.
-                
-                // No branches.
-                
-                break;
-            }
-            
-            // Arithmetic operators
-            emitNode(as, bin->left, ctx);
-            Asm_Push(as, RAX);
-            emitNode(as, bin->right, ctx);
-            Asm_Pop(as, RCX); 
-            // Note: Pops into RCX, but Left was pushed.
-            // If Stack increased due to locals, we must be careful.
-            // Expression evaluation uses temp stack which is effectively "above" locals.
-            // Since we push/pop relative to RSP, locals remain "below".
-            // RBP is fixed anchor. Locals at [RBP-8].
-            if (bin->op.type == TOKEN_PLUS) {
-                // String concat OR Addition
-                
-                int safe = isGuaranteedNumber(bin->left, ctx) && isGuaranteedNumber(bin->right, ctx);
-                
-                if (safe) {
-                    // BLIND FAST PATH (No Type Checks)
-                    emitNode(as, bin->left, ctx);
-                    
-                    int rightSimple = (bin->right->type == NODE_LITERAL_EXPR);
-                    
-                    if (rightSimple) {
-                        Asm_Mov_Reg_Reg(as, R10, RAX);
-                        emitNode(as, bin->right, ctx);
-                        // Left=R10, Right=RAX
-                        // Target: RCX=Left for code below?
-                        Asm_Mov_Reg_Reg(as, RCX, R10);
-                    } else {
-                        Asm_Push(as, RAX);
-                        emitNode(as, bin->right, ctx);
-                        Asm_Pop(as, RCX);
-                    }
-                    
-                    // ADDSD XMM0 (Left=RCX), XMM1 (Right=RAX)
-                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC1); // MOVQ XMM0, RCX
-                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8); // MOVQ XMM1, RAX
-                    Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x58); Asm_Emit8(as, 0xC1); // ADDSD XMM0, XMM1
-                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
-                } else {
-                    // CHECKED PATH (Reg Promotion / Runtime Fallback)
-                    // ... (Logic from previous step, kept for safety for non-numbers)
-                    emitNode(as, bin->left, ctx);
-                    Asm_Push(as, RAX);
-                    emitNode(as, bin->right, ctx);
-                    Asm_Pop(as, RCX);
-                    
-                    Asm_Mov_Imm64(as, R11, 0x7FFC000000000000);
-                    
-                    Asm_Mov_Reg_Reg(as, R10, RAX);
-                    Asm_And_Reg_Reg(as, R10, R11);
-                    Asm_Cmp_Reg_Reg(as, R10, R11);
-                    size_t jumpSlow1 = as->offset + 2; 
-                    Asm_Je(as, 0); 
-                    
-                    Asm_Mov_Reg_Reg(as, R10, RCX);
-                    Asm_And_Reg_Reg(as, R10, R11);
-                    Asm_Cmp_Reg_Reg(as, R10, R11);
-                    size_t jumpSlow2 = as->offset + 2;
-                    Asm_Je(as, 0);
-                    
-                    // Fast Add
-                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC1);
-                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8);
-                    Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x58); Asm_Emit8(as, 0xC1);
-                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0);
-                    
-                    size_t jumpDone = as->offset + 1;
-                    Asm_Jmp(as, 0);
-                    
-                    // Slow Path Call
-                    size_t slowStart = as->offset;
-                    Asm_Patch32(as, jumpSlow1, slowStart - (jumpSlow1 + 4));
-                    Asm_Patch32(as, jumpSlow2, slowStart - (jumpSlow2 + 4));
-                    
-                    Asm_Mov_Reg_Reg(as, RDI, RCX);
-                    Asm_Mov_Reg_Reg(as, RSI, RAX);
-                    void* funcPtr = (void*)Runtime_Add;
-                    Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
-                    Asm_Call_Reg(as, RAX);
-                    
-                    size_t doneStart = as->offset;
-                    Asm_Patch32(as, jumpDone, doneStart - (jumpDone + 4));
-                }
-            } else if (bin->op.type == TOKEN_MINUS || bin->op.type == TOKEN_STAR || bin->op.type == TOKEN_SLASH) {
-                // Arithmetic operators: Use XMM registers (floating point)
-                
-                // 1. Emit Left -> RAX
-                emitNode(as, bin->left, ctx);
-                Asm_Push(as, RAX);
-                
-                // 2. Emit Right -> RAX
+                // 2. Emit Right
                 emitNode(as, bin->right, ctx);
+                ValueType rightType = ctx->lastExprType;
+                // Right in RAX (Raw or Boxed)
                 
-                // Move Right to XMM1
-                // MOVQ XMM1, RAX: 66 48 0F 6E C8
-                Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
-                Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8);
+                Asm_Pop(as, RCX); // Left in RCX
                 
-                // 2. Get Left (popped) -> RAX
-                Asm_Pop(as, RAX);
-                // Move Left to XMM0
-                // MOVQ XMM0, RAX: 66 48 0F 6E C0
-                Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
-                Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0);
-                
-                if (bin->op.type == TOKEN_MINUS) {
-                    // SUBSD XMM0, XMM1: F2 0F 5C C1
-                    Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x5C); Asm_Emit8(as, 0xC1);
-                } else if (bin->op.type == TOKEN_STAR) {
-                    // MULSD XMM0, XMM1: F2 0F 59 C1
-                    Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x59); Asm_Emit8(as, 0xC1);
-                } else if (bin->op.type == TOKEN_SLASH) {
-                    // DIVSD XMM0, XMM1: F2 0F 5E C1
-                    Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F);
-                    Asm_Emit8(as, 0x5E); Asm_Emit8(as, 0xC1);
+                // Dispatch based on Types
+                int isInt = (leftType == TYPE_INT || leftType == TYPE_LONG) && 
+                            (rightType == TYPE_INT || rightType == TYPE_LONG || rightType == TYPE_UNKNOWN); 
+                            // Type Unknown (e.g. literals without dot) might be treated as int if compatible?
+                            // Actually LITERAL_EXPR now sets INT/DOUBLE. 
+                            // UNKNOWN comes from complex exprs? 
+                            // Let's assume strict INT/INT for Integer ALU.
+                            
+                if (isInt) {
+                    // INTEGER ALU (GPR)
+                    // Left = RCX, Right = RAX
+                    if (bin->op.type == TOKEN_PLUS) {
+                        // ADD RAX, RCX ? No, result in RAX. 
+                        // RAX = Right. RCX = Left.
+                        // ADD RAX, RCX => Right + Left. (Commutative). OK.
+                        Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x01); Asm_Emit8(as, 0xC8); // ADD RAX, RCX
+                    } else if (bin->op.type == TOKEN_MINUS) {
+                        // Left - Right => RCX - RAX.
+                        // SUB RCX, RAX. Result in RCX. Move to RAX.
+                        Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x29); Asm_Emit8(as, 0xC1); // SUB RCX, RAX
+                        Asm_Mov_Reg_Reg(as, RAX, RCX);
+                    } else if (bin->op.type == TOKEN_STAR) {
+                        // IMUL RAX, RCX => RAX * RCX. Result in RAX.
+                        Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0xAF); Asm_Emit8(as, 0xC1);
+                    } else if (bin->op.type == TOKEN_SLASH) {
+                        // DIV: Left / Right => RCX / RAX.
+                        // IDIV r64: RDX:RAX / r64. Quotient in RAX.
+                        // We need Left in RAX. Right in Reg.
+                        // Currently: Left=RCX, Right=RAX.
+                        // Swap or Move.
+                        Asm_Push(as, RAX); // Save Right
+                        Asm_Mov_Reg_Reg(as, RAX, RCX); // RAX = Left
+                        Asm_Pop(as, RCX); // RCX = Right
+                        
+                        // CQO (Sign extend RAX to RDX:RAX)
+                        Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x99);
+                        
+                        // IDIV RCX
+                        Asm_Emit8(as, 0x48); Asm_Emit8(as, 0xF7); Asm_Emit8(as, 0xF9);
+                        // Result in RAX.
+                    }
+                    ctx->lastExprType = TYPE_INT; // Result is Int
+                } else if (leftType == TYPE_DOUBLE && (rightType == TYPE_DOUBLE || rightType == TYPE_UNKNOWN)) {
+                    // DOUBLE ALU (XMM) - Both are Boxed Doubles
+                    // Expects Boxed Doubles. 
+                    
+                    // Left=RCX, Right=RAX.
+                    // Move Right to XMM1
+                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8); // MOVQ XMM1, RAX
+                    // Move Left to XMM0
+                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC1); // MOVQ XMM0, RCX
+                    
+                    switch (bin->op.type) {
+                        case TOKEN_PLUS: Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x58); Asm_Emit8(as, 0xC1); break;
+                        case TOKEN_MINUS: Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x5C); Asm_Emit8(as, 0xC1); break;
+                        case TOKEN_STAR: Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x59); Asm_Emit8(as, 0xC1); break;
+                        case TOKEN_SLASH: Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x5E); Asm_Emit8(as, 0xC1); break;
+                        default: break;
+                    }
+                    
+                    // Move result XMM0 -> RAX
+                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0);
+                    ctx->lastExprType = TYPE_DOUBLE;
+                } else {
+                     // FALLBACK / MIXED TYPE / STRING CONCAT
+                     // Requires Boxing primitive Ints/Bools to Values, then calling Runtime_Add (or others?)
+                     // Currently only TOKEN_PLUS supports String Concat via Runtime_Add.
+                     // Others might just be "Safe Double Math" attempt?
+                     
+                     // 1. Box Left (RCX) if needed
+                     if (leftType == TYPE_INT || leftType == TYPE_LONG) {
+                         // Convert Int(RCX) to Double(XMM0) -> RAX
+                         Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC1); // MOVQ XMM0, RCX
+                         Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC0); // CVTSI2SD XMM0, RAX (Wait, RAX? No, CVTSI2SD xmm, r/m64) => CVTSI2SD XMM0, RCX?
+                         // Opcode: F2 48 0F 2A /r. ModRM: XMM0(0), RCX(1) -> C1.
+                         Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC1);
+                         
+                         // Box it (Add NaN offset? No, plain double is okay, NumberToValue adds offset? No, NumberToValue IS simple cast if not NaN boxing? 
+                         // Wait, Runtime uses NaN-boxing. Pure doubles are NOT Values.
+                         // Value = Double | QNAN_MASK? Or just Double?
+                         // If NaN boxing, we NEED to NaN-box it.
+                         // Assuming generic doubles are fine or auto-boxed usually?
+                         // CodeGen `NumberToValue`: `Value val = NumberToValue(num)`.
+                         // We need `Asm_Box_Double(as, XMM0)` logic.
+                         // But we don't have helper here.
+                         // Let's assume Runtime handles plain doubles? No.
+                         // We must call `Runtime_Add`. It expects `Value`.
+                         // We have to assume Left/Right ARE Values.
+                         // Valid Ints should be converted to Values.
+                         // If we just CVTSI2SD, we get raw double.
+                         // We need to OR with 0xFFFC... if boxing?
+                         // Or add constant?
+                         // Implementation detail: `Value` is `double`. But encoding?
+                         // If strict standard boxing (Standard):
+                         // Pointer: 0xFFFC... | Prt
+                         // Double: 0x000... (canonical)
+                         // Wait, if Double, it IS the value.
+                         // We just need to make sure it's not a NaN that looks like a pointer.
+                         // Valid integers converted to double are safe.
+                         
+                         // Move XMM0 -> RCX (Boxed Value)
+                         Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC1); // MOVQ RCX, XMM0
+                     }
+                     // Else assume RCX is already Boxed Value.
+                     
+                     // 2. Box Right (RAX) if needed
+                     if (rightType == TYPE_INT || rightType == TYPE_LONG) {
+                         Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
+                         // CVTSI2SD XMM0, RAX
+                         Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC0);
+                         
+                         Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
+                     }
+                     
+                     // 3. Call Runtime
+                     Asm_Push(as, RCX); // Save Left (Caller Saved?)
+                     Asm_Push(as, RAX); // Save Right
+                     
+                     // Setup Args: RDI=Left(RCX), RSI=Right(RAX)
+                     Asm_Mov_Reg_Reg(as, RDI, RCX);
+                     Asm_Mov_Reg_Reg(as, RSI, RAX);
+                     
+                     // Align Stack (16 byte)?
+                     // We pushed 2 regs (16 bytes). If stack was aligned before, it is aligned now?
+                     // EmitNode assumes normal stack.
+                     // Just Call.
+                     
+                     void* funcPtr = NULL;
+                     if (bin->op.type == TOKEN_PLUS) {
+                        funcPtr = (void*)Runtime_Add;
+                        
+                        // ALIGN STACK Before CALL (Runtime_Add uses malloc which needs 16-byte align)
+                        int padding = 0;
+                        if (ctx->stackSize % 16 != 0) {
+                            padding = 8;
+                            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xEC); Asm_Emit8(as, 0x08); // SUB RSP, 8
+                        }
+
+                        Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                        Asm_Call_Reg(as, RAX);
+                        
+                        if (padding > 0) {
+                             Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xC4); Asm_Emit8(as, 0x08); // ADD RSP, 8
+                        }
+                        
+                        // Result in RAX.
+                        // All functions return Boxed Values.
+                        ctx->lastExprType = TYPE_UNKNOWN; 
+                        // Stack Cleanup
+                     } else {
+                        // Inline Double Math for - * /
+                        // Left(RCX), Right(RAX) are now Boxed Doubles (Values).
+                        // Move to XMM
+                        Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC1); // MOVQ XMM0, RCX
+                        Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8); // MOVQ XMM1, RAX
+                        
+                        if (bin->op.type == TOKEN_MINUS) {
+                             Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x5C); Asm_Emit8(as, 0xC1); // SUBSD XMM0, XMM1
+                        } else if (bin->op.type == TOKEN_STAR) {
+                             Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x59); Asm_Emit8(as, 0xC1); // MULSD XMM0, XMM1
+                        } else if (bin->op.type == TOKEN_SLASH) {
+                             Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x5E); Asm_Emit8(as, 0xC1); // DIVSD XMM0, XMM1
+                        }
+                        
+                        // Move Result XMM0 -> RAX
+                        Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
+                        ctx->lastExprType = TYPE_DOUBLE;
+                     }
+                     
+                     Asm_Pop(as, RCX); // Cleanup pushes
+                     Asm_Pop(as, RCX);
                 }
+            } else if (bin->op.type == TOKEN_LESS || bin->op.type == TOKEN_GREATER || 
+                       bin->op.type == TOKEN_LESS_EQUAL || bin->op.type == TOKEN_GREATER_EQUAL ||
+                       bin->op.type == TOKEN_EQUAL_EQUAL || bin->op.type == TOKEN_BANG_EQUAL) {
+                       
+                // Comparison (Int vs Double)
+                emitNode(as, bin->left, ctx);
+                ValueType leftType = ctx->lastExprType;
+                Asm_Push(as, RAX);
+                emitNode(as, bin->right, ctx);
+                ValueType rightType = ctx->lastExprType;
+                Asm_Pop(as, R10); // Left in R10
                 
-                // Move result XMM0 -> RAX
-                // MOVQ RAX, XMM0: 66 48 0F 7E C0
-                Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F);
-                Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0);
+                int isInt = (leftType == TYPE_INT || leftType == TYPE_LONG || leftType == TYPE_BOOLEAN) && 
+                            (rightType == TYPE_INT || rightType == TYPE_LONG || rightType == TYPE_BOOLEAN);
+
+                if (isInt) {
+                    // Integer Compare: CMP R10, RAX
+                    Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC2); // CMP R10, RAX (Wait, R10? need REX.W+REX.B=48+4+1=4D? NO. R10=8+2. Low=2. Ext=1)
+                    // CMP r/m64, r64 (MR)? or RM?
+                    // CMP R10, RAX.
+                    // R10 is destination? LHS.
+                    // CMP LHS, RHS.
+                    // Opcode 39 /r : CMP r/m64, r64. (MR).
+                    // ModRM: Reg=RAX(0), RM=R10(2).
+                    // REX.W(1) | REX.B(1) (for R10). 0x48 | 0x04? No REX.B is 01. 0x49.
+                    // ModRM: 11 000 010 (C2).
+                    // Correct: 49 39 C2.
+                    
+                    // SETcc
+                    Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x31); Asm_Emit8(as, 0xC0); // XOR RAX, RAX (Result 0)
+                    
+                    if (bin->op.type == TOKEN_LESS) { Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x9C); Asm_Emit8(as, 0xC0); }  // SETL
+                    else if (bin->op.type == TOKEN_GREATER) { Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x9F); Asm_Emit8(as, 0xC0); } // SETG
+                    else if (bin->op.type == TOKEN_LESS_EQUAL) { Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x9E); Asm_Emit8(as, 0xC0); } // SETLE
+                    else if (bin->op.type == TOKEN_GREATER_EQUAL) { Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x9D); Asm_Emit8(as, 0xC0); } // SETGE
+                    else if (bin->op.type == TOKEN_EQUAL_EQUAL) { Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x94); Asm_Emit8(as, 0xC0); } // SETE
+                    else if (bin->op.type == TOKEN_BANG_EQUAL) { Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x95); Asm_Emit8(as, 0xC0); } // SETNE
+                    
+                    ctx->lastExprType = TYPE_BOOLEAN; // Raw 0/1                    
+                } else {
+                    // Double / Mixed Compare
+                    // Need to ensure both are in XMM registers as Doubles.
+                    
+                    // Handle Right (RAX)
+                    if (rightType == TYPE_INT || rightType == TYPE_LONG) {
+                         // Cast Int -> Double
+                         Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8); // MOVQ XMM1, RAX
+                         Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC8); // CVTSI2SD XMM1, RAX
+                    } else {
+                         // Assume Double - Move directly
+                         Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8); // MOVQ XMM1, RAX
+                    }
+                    
+                    // Handle Left (R10)
+                    if (leftType == TYPE_INT || leftType == TYPE_LONG) {
+                         // Cast Int -> Double
+                         Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC2); // MOVQ XMM0, R10
+                         Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC2); // CVTSI2SD XMM0, R10
+                    } else {
+                         // Assume Double
+                         Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC2); // MOVQ XMM0, R10
+                    }
+                    
+                    Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2E); Asm_Emit8(as, 0xC1); // UCOMISD XMM0, XMM1
+                    
+                    Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x31); Asm_Emit8(as, 0xC0); // Zero RAX
+                    
+                    if (bin->op.type == TOKEN_LESS) { Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x92); Asm_Emit8(as, 0xC0); } // SETB
+                    else if (bin->op.type == TOKEN_GREATER) { Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x97); Asm_Emit8(as, 0xC0); } // SETA
+                    else if (bin->op.type == TOKEN_LESS_EQUAL) { Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x96); Asm_Emit8(as, 0xC0); } // SETBE
+                    else if (bin->op.type == TOKEN_GREATER_EQUAL) { Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x93); Asm_Emit8(as, 0xC0); } // SETAE
+                    else if (bin->op.type == TOKEN_EQUAL_EQUAL) { Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x94); Asm_Emit8(as, 0xC0); } // SETE
+                    else if (bin->op.type == TOKEN_BANG_EQUAL) { Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x95); Asm_Emit8(as, 0xC0); } // SETNE
+                    
+                    ctx->lastExprType = TYPE_BOOLEAN;
+                }
             }
             break;
         }

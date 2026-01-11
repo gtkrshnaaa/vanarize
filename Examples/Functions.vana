@@ -2,20 +2,20 @@
 // Test Case: Functions (PascalCase, Typed Parameters, Return Types)
 // Master Plan Compliance: Sections 4.4 and 3.2
 
-function Add(number a, number b) :: number {
+function Add(double a, double b) :: double {
     return a + b;
 }
 
-function Multiply(number a, number b) :: number {
+function Multiply(double a, double b) :: double {
     return a * b;
 }
 
 function Main() {
-    number x = 5;
-    number y = 10;
+    double x = 5;
+    double y = 10;
     
-    number sum = Add(x, y);
-    number product = Multiply(x, y);
+    double sum = Add(x, y);
+    double product = Multiply(x, y);
     
     print(sum);
     print(product);

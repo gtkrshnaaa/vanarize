@@ -2,13 +2,13 @@
 // Master Plan Compliance: PascalCase Structs, Typed Fields
 
 struct Point {
-    number x
-    number y
+    double x
+    double y
 }
 
 function Main() {
     Point p = { x: 10, y: 20 };
     
-    number sum = p.x + p.y;
+    double sum = p.x + p.y;
     print(sum);
 }

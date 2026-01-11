@@ -2,25 +2,25 @@
 // Direct measurement without function calls
 
 function Main() {
-    number iterations = 1000000;
-    number i = 0;
-    number sum = 0;
+    int iterations = 1000000;
+    int i = 0;
+    int sum = 0;
     
     // Start measurement
     StdTime.Measure();
     
-    number start = StdTime.Now();
+    double start = StdTime.Now();
     
-    for (number i = 0; i < iterations; i = i + 1) {
+    for (int i = 0; i < iterations; i = i + 1) {
         // pass
     }
     
     // Stop and get elapsed time (nanoseconds)
-    number elapsed = StdTime.Measure();
+    double elapsed = StdTime.Measure();
     
     // Calculate operations per second
-    number billion = 1000000000;
-    number opsPerSec = iterations * billion / elapsed;
+    double billion = 1000000000;
+    double opsPerSec = iterations * billion / elapsed;
     
     print(opsPerSec);
 }

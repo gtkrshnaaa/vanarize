@@ -1,8 +1,8 @@
 // Test for loop parsing
 // Master Plan Compliance: Typed Variables, C-style loops
 function Main() {
-    number sum = 0;
-    for (number i = 0; i < 5; i = i + 1) {
+    int sum = 0;
+    for (int i = 0; i < 5; i = i + 1) {
         sum = sum + i;
     }
     print("Sum: " + sum);

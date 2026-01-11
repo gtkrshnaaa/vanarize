@@ -1,8 +1,8 @@
 // Test simple loop
 function Main() {
     print("Start loop");
-    number count = 0;
-    for (number i = 0; i < 10; i = i + 1) {
+    int count = 0;
+    for (int i = 0; i < 10; i = i + 1) {
         count = count + 1;
     }
     print(count);

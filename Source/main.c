@@ -1,5 +1,7 @@
+#define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include "Compiler/Parser.h"
 #include "Jit/CodeGen.h"
 #include "Core/Memory.h"
@@ -30,10 +32,29 @@ int main(int argc, char* argv[]) {
         exit(64);
     }
     
-    int stackDummy;
+    // Initialize Core Systems
     VM_InitMemory();
-    GC_Init(&stackDummy);
+    // Jit_Init(); // Initialized internally or not needed if stateless
     
+    // Calculate Max Potential Performance (Calibration)
+    // We run a simple native C loop to estimate single-core integer throughput.
+    long long iterations = 50000000;
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    
+    volatile long sum = 0;
+    for (volatile long i = 0; i < iterations; i++) {
+        sum += 1;
+    }
+    
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    
+    double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+    double opsPerSec = iterations / elapsed;
+    
+    printf("\n[Vanarize Engine] Max potential performance in integer is %.0f Million ops/sec\n\n", opsPerSec / 1000000.0);
+    
+    // Check args
     char* source = readFile(argv[1]);
     
     Parser_Init(source);

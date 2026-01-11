@@ -392,10 +392,7 @@ static AstNode* declaration() {
     // 2. Typed Declaration or 'var'
     Token typeToken = {0};
 
-    if (currentToken.type == TOKEN_VAR) {
-        advance();
-        return parseVarDecl(false, (Token){0});
-    }
+
     
     if (currentToken.type == TOKEN_TYPE_BYTE || currentToken.type == TOKEN_TYPE_SHORT ||
         currentToken.type == TOKEN_TYPE_INT || currentToken.type == TOKEN_TYPE_LONG ||

@@ -4,14 +4,14 @@
 function Main() {
     print("Testing StdMath...");
     
-    number pi = 3.14159;
+    double pi = 3.14159;
     print("Sin(PI): " + StdMath.Sin(pi)); // Should be ~0
     print("Cos(PI): " + StdMath.Cos(pi)); // Should be -1
     
-    number s = StdMath.Sqrt(16);
+    double s = StdMath.Sqrt(16);
     print("Sqrt(16): " + s); // 4
     
-    number n = -42;
+    int n = -42;
     print("Abs(-42): " + StdMath.Abs(n)); // 42
     
     print("Done.");

@@ -1,7 +1,7 @@
 // Simple test - just increment
 function Main() {
     print("Start");
-    number i = 0;
+    int i = 0;
     i = i + 1;
     print(i);
     print("Done");

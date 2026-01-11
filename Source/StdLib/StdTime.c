@@ -11,7 +11,10 @@ static int measureActive = 0;
 
 uint64_t StdTime_GetRaw(void) {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        printf("clock_gettime failed!\n");
+        return 0;
+    }
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
