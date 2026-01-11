@@ -279,33 +279,48 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     // Wait, `local->internalType` was just SET to `lastExprType` which is wrong if we want to enforce declared type.
                     // We must determine Target Type from Declaration.
                     
-                    ValueType targetType = TYPE_UNKNOWN;
-                    if (decl->typeName.length == 3 && memcmp(decl->typeName.start, "int", 3) == 0) targetType = TYPE_INT;
-                    else if (decl->typeName.length == 6 && memcmp(decl->typeName.start, "double", 6) == 0) targetType = TYPE_DOUBLE;
-                    
-                    if (targetType != TYPE_UNKNOWN) {
-                        local->internalType = targetType; // Enforce Variable Type
-                        
-                        if (targetType == TYPE_DOUBLE && (ctx->lastExprType == TYPE_INT || ctx->lastExprType == TYPE_LONG)) {
-                             // Cast Int(RAX) -> Double(RAX, bitcasted)
-                             // Logic: CVTSI2SD XMM0, RAX. MOVQ RAX, XMM0.
-                             Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
-                             Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC0); // CVTSI2SD XMM0, RAX
-                             Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
-                        } 
-                        else if (targetType == TYPE_INT && ctx->lastExprType == TYPE_DOUBLE) {
-                             // Cast Double(RAX) -> Int(RAX)
-                             // Logic: MOVQ XMM0, RAX. CVTTSD2SI RAX, XMM0.
-                             Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
-                             Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2C); Asm_Emit8(as, 0xC0); // CVTTSD2SI RAX, XMM0
-                        }
-                    }
+
                 }
             } else {
                 Asm_Mov_Imm64(as, RAX, VAL_NULL);
                 local->internalType = TYPE_UNKNOWN;
+                ctx->lastExprType = TYPE_UNKNOWN; // Reset for NoInit
             }
             
+            // MOVED: Target Type & Unboxing Logic (Runs for Literals too)
+            ValueType targetType = TYPE_UNKNOWN;
+            if (decl->typeName.length == 3 && memcmp(decl->typeName.start, "int", 3) == 0) targetType = TYPE_INT;
+            else if (decl->typeName.length == 6 && memcmp(decl->typeName.start, "double", 6) == 0) targetType = TYPE_DOUBLE;
+            else if (decl->typeName.length == 4 && memcmp(decl->typeName.start, "long", 4) == 0) targetType = TYPE_LONG;
+            else if (decl->typeName.length == 4 && memcmp(decl->typeName.start, "byte", 4) == 0) targetType = TYPE_BYTE;
+            else if (decl->typeName.length == 5 && memcmp(decl->typeName.start, "short", 5) == 0) targetType = TYPE_SHORT;
+            else if (decl->typeName.length == 4 && memcmp(decl->typeName.start, "char", 4) == 0) targetType = TYPE_CHAR;
+            else if (decl->typeName.length == 5 && memcmp(decl->typeName.start, "float", 5) == 0) targetType = TYPE_FLOAT;
+
+            if (targetType != TYPE_UNKNOWN) {
+                local->internalType = targetType;
+                
+                if (targetType == TYPE_DOUBLE && (ctx->lastExprType == TYPE_INT || ctx->lastExprType == TYPE_LONG)) {
+                     // Int -> Double (Box)
+                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); 
+                     Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC0); 
+                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); 
+                } 
+                else if (targetType == TYPE_FLOAT && ctx->lastExprType == TYPE_DOUBLE) {
+                    // Double -> Float (Downcast)
+                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); 
+                     Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x5A); Asm_Emit8(as, 0xC0); 
+                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); 
+                }
+                else if ((targetType == TYPE_INT || targetType == TYPE_LONG || 
+                          targetType == TYPE_BYTE || targetType == TYPE_SHORT || targetType == TYPE_CHAR) && 
+                          ctx->lastExprType == TYPE_DOUBLE) {
+                     // Double -> Int (Unbox)
+                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); 
+                     Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2C); Asm_Emit8(as, 0xC0); 
+                }
+            }
+
             // Optimization: If primitive type (int/long/bool/double), try allocate register
             int useReg = 0;
             if (decl->typeName.length == 3 && memcmp(decl->typeName.start, "int", 3) == 0) {
@@ -319,6 +334,18 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 useReg = 1;
             } else if (decl->typeName.length == 6 && memcmp(decl->typeName.start, "double", 6) == 0) {
                 local->internalType = TYPE_DOUBLE;
+                useReg = 1;
+            } else if (decl->typeName.length == 5 && memcmp(decl->typeName.start, "float", 5) == 0) {
+                local->internalType = TYPE_FLOAT;
+                useReg = 1;
+            } else if (decl->typeName.length == 4 && memcmp(decl->typeName.start, "byte", 4) == 0) {
+                local->internalType = TYPE_BYTE;
+                useReg = 1;
+            } else if (decl->typeName.length == 5 && memcmp(decl->typeName.start, "short", 5) == 0) {
+                local->internalType = TYPE_SHORT;
+                useReg = 1;
+            } else if (decl->typeName.length == 4 && memcmp(decl->typeName.start, "char", 4) == 0) {
+                local->internalType = TYPE_CHAR;
                 useReg = 1;
             }
 
@@ -922,9 +949,14 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                         emitNode(as, call->args[0], ctx);
                         // BOXING FIX FOR PRINT
                         ValueType type = ctx->lastExprType;
-                        if (type == TYPE_INT || type == TYPE_LONG) {
+                        if (type == TYPE_INT || type == TYPE_LONG || 
+                            type == TYPE_BYTE || type == TYPE_SHORT || type == TYPE_CHAR) {
                              Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
                              Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC0); // CVTSI2SD XMM0, RAX
+                             Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
+                        } else if (type == TYPE_FLOAT) {
+                             Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
+                             Asm_Emit8(as, 0xF3); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x5A); Asm_Emit8(as, 0xC0); // CVTSS2SD
                              Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
                         } else if (type == TYPE_BOOLEAN) {
                              Asm_Mov_Imm64(as, RCX, VAL_FALSE);
@@ -997,15 +1029,28 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                 // For now, ALWAYS BOX for CALL.
                 
                 ValueType type = ctx->lastExprType;
-                if (type == TYPE_INT || type == TYPE_LONG) {
-                     // Convert Int(RAX) to Double(XMM0) -> RAX
+                if (type == TYPE_INT || type == TYPE_LONG || 
+                    type == TYPE_BYTE || type == TYPE_SHORT || type == TYPE_CHAR) {
+                     // Convert Integer(RAX) to Double(XMM0) -> RAX
                      Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
                      Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC0); // CVTSI2SD XMM0, RAX
                      Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
+                } else if (type == TYPE_FLOAT) {
+                     // Convert Float(XMM0/RAX lower 32) -> Double(XMM0) -> RAX
+                     // Assuming Float is stored in RAX (as 32-bit bits) or XMM?
+                     // Current VarDecl emits Double logic mostly. 
+                     // But if we strictly implemented Float, we'd need CVTSS2SD.
+                     // For now, let's treat Float as Double in storage to be safe until Phase 7b strict math.
+                     // But if type IS FLOAT, we might need conversion.
+                     // CodeGen currently loads via emitRegisterLoad -> MOVQ (64-bit).
+                     // If it was stored as 32-bit, we have garbage in high bits?
+                     // Safer to Convert:
+                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
+                     // CVTSS2SD XMM0, XMM0 (F3 0F 5A C0)
+                     Asm_Emit8(as, 0xF3); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x5A); Asm_Emit8(as, 0xC0); 
+                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
                 } else if (type == TYPE_BOOLEAN) {
                      // Convert Bool(RAX=0/1) to VAL_FALSE/VAL_TRUE
-                     // VAL_FALSE = QNAN | 2. VAL_TRUE = QNAN | 3.
-                     // If RAX=0/1. Result = (QNAN|2) + RAX.
                      Asm_Mov_Imm64(as, RCX, VAL_FALSE);
                      Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x01); Asm_Emit8(as, 0xC8); // ADD RAX, RCX
                 }

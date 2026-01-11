@@ -1,0 +1,31 @@
+function Main() {
+    print("Testing Primitives...");
+
+    // Test Byte
+    byte b = 127;
+    print(b);
+
+    // Test Short
+    short s = 32000;
+    print(s);
+
+    // Test Float
+    float f = 3.14;
+    print(f);
+
+    // Test Char
+    // char c = 'A'; // Char literals not yet implemented in Lexer.
+    char c = 65; 
+    print(c);
+
+    print("Types Done.");
+
+    // Test Int/Long
+    int i = 2147483647;
+    print(i);
+    long l = 9223372036854775807; 
+    // Note: Printing long might overflow standard print double conversion if not careful, 
+    // but internal Value is uint64 so it should be fine.
+    print(l);  
+
+}

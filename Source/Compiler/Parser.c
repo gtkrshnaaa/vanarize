@@ -456,7 +456,8 @@ static AstNode* declaration() {
                 currentToken.type == TOKEN_TYPE_INT || currentToken.type == TOKEN_TYPE_LONG ||
                 currentToken.type == TOKEN_TYPE_FLOAT || currentToken.type == TOKEN_TYPE_DOUBLE ||
                 currentToken.type == TOKEN_TYPE_CHAR || currentToken.type == TOKEN_TYPE_BOOLEAN ||
-                currentToken.type == TOKEN_TYPE_STRING || currentToken.type == TOKEN_IDENTIFIER) {
+                currentToken.type == TOKEN_TYPE_STRING || currentToken.type == TOKEN_TYPE_VOID || 
+                currentToken.type == TOKEN_IDENTIFIER) {
                 returnType = currentToken;
                 advance();
             } else {
