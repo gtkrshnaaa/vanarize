@@ -364,7 +364,9 @@ static AstNode* declaration() {
         
         while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
              TokenType t = currentToken.type;
-             if (t == TOKEN_TYPE_NUMBER || t == TOKEN_TYPE_TEXT || t == TOKEN_TYPE_BOOLEAN || t == TOKEN_IDENTIFIER) {
+             if (t == TOKEN_TYPE_BYTE || t == TOKEN_TYPE_SHORT || t == TOKEN_TYPE_INT || t == TOKEN_TYPE_LONG ||
+                 t == TOKEN_TYPE_FLOAT || t == TOKEN_TYPE_DOUBLE || t == TOKEN_TYPE_CHAR || t == TOKEN_TYPE_BOOLEAN ||
+                 t == TOKEN_TYPE_STRING || t == TOKEN_IDENTIFIER) {
                  fieldTypes[fieldCount] = currentToken;
                  advance();
              } else {
@@ -395,9 +397,11 @@ static AstNode* declaration() {
         return parseVarDecl(false, (Token){0});
     }
     
-    if (currentToken.type == TOKEN_TYPE_NUMBER || 
-        currentToken.type == TOKEN_TYPE_TEXT || 
-        currentToken.type == TOKEN_TYPE_BOOLEAN) {
+    if (currentToken.type == TOKEN_TYPE_BYTE || currentToken.type == TOKEN_TYPE_SHORT ||
+        currentToken.type == TOKEN_TYPE_INT || currentToken.type == TOKEN_TYPE_LONG ||
+        currentToken.type == TOKEN_TYPE_FLOAT || currentToken.type == TOKEN_TYPE_DOUBLE ||
+        currentToken.type == TOKEN_TYPE_CHAR || currentToken.type == TOKEN_TYPE_BOOLEAN ||
+        currentToken.type == TOKEN_TYPE_STRING) {
         typeToken = currentToken;
         advance();
         return parseVarDecl(true, typeToken);
@@ -426,9 +430,11 @@ static AstNode* declaration() {
             do {
                 // Check if typed: Type Name
                 Token typeToken = {0};
-                if (currentToken.type == TOKEN_TYPE_NUMBER || 
-                    currentToken.type == TOKEN_TYPE_TEXT || 
-                    currentToken.type == TOKEN_TYPE_BOOLEAN) {
+                if (currentToken.type == TOKEN_TYPE_BYTE || currentToken.type == TOKEN_TYPE_SHORT ||
+                    currentToken.type == TOKEN_TYPE_INT || currentToken.type == TOKEN_TYPE_LONG ||
+                    currentToken.type == TOKEN_TYPE_FLOAT || currentToken.type == TOKEN_TYPE_DOUBLE ||
+                    currentToken.type == TOKEN_TYPE_CHAR || currentToken.type == TOKEN_TYPE_BOOLEAN ||
+                    currentToken.type == TOKEN_TYPE_STRING) {
                     typeToken = currentToken;
                     advance();
                 } else if (currentToken.type == TOKEN_IDENTIFIER && nextToken.type == TOKEN_IDENTIFIER) {
@@ -449,10 +455,11 @@ static AstNode* declaration() {
         Token returnType = {0};
         if (currentToken.type == TOKEN_DOUBLE_COLON) {
             advance();
-            if (currentToken.type == TOKEN_TYPE_NUMBER || 
-                currentToken.type == TOKEN_TYPE_TEXT || 
-                currentToken.type == TOKEN_TYPE_BOOLEAN ||
-                currentToken.type == TOKEN_IDENTIFIER) {
+            if (currentToken.type == TOKEN_TYPE_BYTE || currentToken.type == TOKEN_TYPE_SHORT ||
+                currentToken.type == TOKEN_TYPE_INT || currentToken.type == TOKEN_TYPE_LONG ||
+                currentToken.type == TOKEN_TYPE_FLOAT || currentToken.type == TOKEN_TYPE_DOUBLE ||
+                currentToken.type == TOKEN_TYPE_CHAR || currentToken.type == TOKEN_TYPE_BOOLEAN ||
+                currentToken.type == TOKEN_TYPE_STRING || currentToken.type == TOKEN_IDENTIFIER) {
                 returnType = currentToken;
                 advance();
             } else {
