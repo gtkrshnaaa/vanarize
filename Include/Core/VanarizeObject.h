@@ -35,8 +35,9 @@ typedef struct {
 
 typedef struct {
     Obj obj;
-    int fieldCount;
-    Value fields[]; // Flexible array
+    uint32_t size;         // Total size in bytes of the data blob
+    uint64_t pointerBitmap; // Bit N is 1 if byte-offset N is start of a Pointer
+    uint8_t data[];        // Packed data (flexible array)
 } ObjStruct;
 
 // Helper to cast Value to String
