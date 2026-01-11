@@ -53,10 +53,14 @@ void GC_RegisterObject(Obj* obj) {
 }
 
 static void markValue(Value value) {
+    // STRICT TAGGING CHECK
+    // Only mark if it is a Boxed Object (QNAN + ...).
+    // Raw Doubles (not QNAN) and Raw Integers are ignored.
     if (!IsObj(value)) return;
+    
     Obj* obj = ValueToObj(value);
     
-    // Conservative GC Check
+    // Conservative GC Check (Address Validity)
     uintptr_t addr = (uintptr_t)obj;
     if (addr < minAddr || addr > maxAddr) return;
     
@@ -77,8 +81,18 @@ static void markValue(Value value) {
         // Functions reference nothing (for now)
     } else if (obj->type == OBJ_STRUCT) {
         ObjStruct* s = (ObjStruct*)obj;
-        for (int i = 0; i < s->fieldCount; i++) {
-            markValue(s->fields[i]);
+        // Scan Bitmap to find pointers
+        // ... (Logic)
+        uint64_t map = s->pointerBitmap;
+        int offset = 0;
+        
+        while (map > 0) {
+            if (map & 1) {
+                Value* ptrVal = (Value*)(s->data + offset);
+                markValue(*ptrVal);
+            }
+            map >>= 1;
+            offset += 8;
         }
     }
 }
