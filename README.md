@@ -6,27 +6,73 @@ Vanarize is an ultra-high-performance, statically-typed scripting language that 
 Current Peak Throughput: 832,000,000 Operations/Second (Int Benchmark)
 
 Vanarize achieves near-native performance through aggressive JIT optimizations:
-- 128x Loop Unrolling: Dramatically reduces loop control overhead for high-frequency arithmetic.
+- 128x Loop Unrolling: Dramatically reduces loop control overhead.
 - Register Promotion: Maps local variables directly to CPU registers (RBX, R12-R15).
-- Inline Arithmetic: Emits single assembly instructions (ADD, SUB, IMUL) for numeric operations, bypassing runtime calls.
-- Fused Compare-Branch: Compiles relational operators to direct CPU conditional jumps, skipping boolean object allocation.
-- SIMD Infrastructure: Supports 256-bit AVX instructions (VPADDD, VADDPD) for vectorized throughput.
+- Inline Arithmetic: Emits single assembly instructions for numeric operations.
+- SIMD Infrastructure: Supports 256-bit AVX instructions for vectorized throughput.
+
+### Benchmark Metrics (100M iterations)
+| Operation Type | Throughput (Ops/Sec) | Latency (ns/op) |
+|----------------|----------------------|-----------------|
+| Integer (32-bit)| 832,000,000          | 1.20 ns         |
+| Pure Loop      | 735,000,000          | 1.36 ns         |
+| Boolean Logic  | 678,000,000          | 1.47 ns         |
+| Double (64-bit)| 319,000,000          | 3.13 ns         |
+
+## Syntax Guide
+
+Vanarize uses a strict, C-style syntax designed for predictability and performance.
+
+### Variable Declarations
+```java
+int count = 100;
+double price = 19.99;
+boolean active = true;
+string name = "Vanarize";
+```
+
+### Structs and Objects
+```java
+struct User {
+    int id;
+    string name;
+}
+
+fn main() {
+    User u = User();
+    u.id = 1;
+    u.name = "Admin";
+}
+```
+
+### Functions and Control Flow
+```java
+fn fib(int n) int {
+    if (n < 2) return n;
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn loopExample() {
+    for (int i = 0; i < 1000; i = i + 1) {
+        // High-performance JIT-compiled loop
+    }
+}
+```
+
+### Async/Await
+```java
+async fn fetchData(string url) string {
+    // Native event-loop integration
+    return await request(url);
+}
+```
 
 ## Core Features
 - Direct Machine Code Generation: No bytecode or VM interpretation.
 - Strict Type System: Statically typed with explicit primitive widths.
-- Async/Await: Built-in support for asynchronous programming with a native event loop.
-- NaN-Boxing: Efficient 64-bit representation for all values (Doubles, Pointers, Booleans).
-- Modules: Robust import system for code organization and reusable libraries.
-- Structs: User-defined data types with direct memory mapping.
-- Native Interop: Fully compliant with the System V AMD64 ABI.
-
-## Type System
-Vanarize implements a comprehensive primitive type system:
-- Integers: byte (8), short (16), int (32), long (64).
-- Floats: float (32), double (64).
-- Text: char (16), string (managed).
-- Logic: boolean (mapped to 1/0).
+- Async/Await: Built-in support for asynchronous programming.
+- NaN-Boxing: Efficient 64-bit representation for all values.
+- Modules: Robust import system with namespace resolution.
 
 ## Building
 Requirements: GCC and an x86-64 Linux environment.
@@ -47,9 +93,3 @@ Run any .vana script using the vanarize binary:
 - Source/Compiler/: Lexer and Recursive Descent Parser.
 - Source/Core/: Runtime engine, NaN-Boxing, and Mark-and-Sweep GC.
 - Source/StdLib/: Standard libraries (Benchmark, Time, Network, Json, Math).
-- Examples/: Test suite and benchmarks.
-
-## Future Roadmap
-- Reach and exceed 1.0B operations/second through further vectorization.
-- Support for more complex struct layouts and method dispatch.
-- Enhanced static analysis for even more aggressive fast-paths.
