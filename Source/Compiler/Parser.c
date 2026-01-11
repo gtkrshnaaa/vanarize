@@ -717,81 +717,20 @@ static AstNode* statement() {
         AstNode* body = statement();
         
         // Desugar: { init; while(cond) { body; inc; } }
+        // MASTERPLAN: while is REMOVED. Use ForStmt directly!
         
-        if (increment != NULL) {
-            // Create block for body + increment
-            BlockStmt* block = malloc(sizeof(BlockStmt));
-            block->main.type = NODE_BLOCK;
-            block->statements = malloc(sizeof(AstNode*) * 2);
-            block->statements[0] = body;
-            // Increment is an expression, wrap in plain evaluation??
-            // JIT emitNode handles expression by evaluating. 
-            // In Block we expect Statements. ExpressionStmt handles expression + pop?
-            // JIT for Expression just evaluates.
-            // Let's assume Expression is a valid Statement in our specific JIT/AST flavor 
-            // OR wrap it in ExpressionStmt if we had one explicitly distinct?
-            // Ast just says Node. JIT emits it.
-            // If increment returns value, it stays on stack?
-            // JIT emitNode for Block: loops through statements.
-            // If statement leaves value, stack grows. 
-            // We need to POP if it's an expression.
-            // But Parser desugaring usually makes it an ExpressionStmt?
-            // My Parser doesn't seem to have explicit ExpressionStmt Node wrapping Expression.
-            // statement() -> expression()-> consumes semicolon -> returns Expression Node?
-            // Check return of statement() for ExpressionStmt. 
-            // See Line 468 in view: statement() returns expression() result directly?
-            // I need to verify if statement() wraps expression.
-            // Wait, statement() calls expressionStatement()?
-            
-            block->statements[1] = increment;
-            block->count = 2;
-            body = (AstNode*)block;
-        }
+        ForStmt* forStmt = malloc(sizeof(ForStmt));
+        forStmt->main.type = NODE_FOR_STMT;
+        forStmt->initializer = initializer;
+        forStmt->condition = condition;
+        forStmt->increment = increment;
+        forStmt->body = body;
         
-        if (condition == NULL) {
-             // while(true)
-             LiteralExpr* trueLit = malloc(sizeof(LiteralExpr));
-             trueLit->main.type = NODE_LITERAL_EXPR; 
-             // We need a TOKEN_TRUE
-             Token t; t.type = TOKEN_TRUE; t.start="true"; t.length=4; t.line=0;
-             trueLit->token = t;
-             condition = (AstNode*)trueLit;
-        }
-        
-        WhileStmt* whileStmt = malloc(sizeof(WhileStmt));
-        whileStmt->main.type = NODE_WHILE_STMT;
-        whileStmt->condition = condition;
-        whileStmt->body = body;
-        
-        if (initializer != NULL) {
-             BlockStmt* outer = malloc(sizeof(BlockStmt));
-             outer->main.type = NODE_BLOCK;
-             outer->statements = malloc(sizeof(AstNode*) * 2);
-             outer->statements[0] = initializer;
-             outer->statements[1] = (AstNode*)whileStmt;
-             outer->count = 2;
-             return (AstNode*)outer;
-        }
-        
-        return (AstNode*)whileStmt;
+        return (AstNode*)forStmt;
     }
-
-    if (currentToken.type == TOKEN_WHILE) {
-        // User Ban: While loops should be removed from Examples, but Parser MUST support them 
-        // because we desugar 'for' into 'while'. 
-        // So JIT/Parser needs 'while' support.
-        advance();
-        consume(TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
-        AstNode* condition = expression();
-        consume(TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
-        AstNode* body = statement();
-        
-        WhileStmt* node = malloc(sizeof(WhileStmt));
-        node->main.type = NODE_WHILE_STMT;
-        node->condition = condition;
-        node->body = body;
-        return (AstNode*)node;
-    }
+    
+    // NOTE: TOKEN_WHILE removed per MASTERPLAN Section 4.2.C
+    // 'while' loops are explicitly NOT supported in Vanarize
     
     if (currentToken.type == TOKEN_LEFT_BRACE) {
         advance();

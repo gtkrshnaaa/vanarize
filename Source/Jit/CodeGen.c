@@ -1407,79 +1407,81 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
             break;
         }
 
-        case NODE_WHILE_STMT: {
-            WhileStmt* whileStmt = (WhileStmt*)node;
+        case NODE_FOR_STMT: {
+            // Direct For Loop (MASTERPLAN: while removed)
+            ForStmt* forStmt = (ForStmt*)node;
             
-            // Loop start
+            // 1. Emit initializer if present
+            if (forStmt->initializer) {
+                emitNode(as, forStmt->initializer, ctx);
+            }
+            
+            // 2. Loop start
             size_t loopStart = as->offset;
             
-            // OPTIMIZATION: Fused Compare-Branch
-            int fused = 0;
+            // 3. Condition check
             size_t loopEndPatch = 0;
+            int fused = 0;
             
-            if (whileStmt->condition->type == NODE_BINARY_EXPR) {
-                BinaryExpr* bin = (BinaryExpr*)whileStmt->condition;
-                if (bin->op.type == TOKEN_LESS) { // Only optimizing '<' for now (common in loops)
-                     // Emit Left -> RAX/R10
-                     emitNode(as, bin->left, ctx);
-                     int rightSimple = (bin->right->type == NODE_LITERAL_EXPR);
-                     if (rightSimple) {
-                         Asm_Mov_Reg_Reg(as, R10, RAX);
-                         emitNode(as, bin->right, ctx);
-                         // Left=R10, Right=RAX
-                     } else {
-                         Asm_Push(as, RAX);
-                         emitNode(as, bin->right, ctx);
-                         Asm_Pop(as, R10);
-                     }
-                     // Move to XMM
-                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8); // XMM1 = Right
-                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC2); // XMM0 = Left (R10)
-                     
-                     // UCOMISD XMM0, XMM1 (Left < Right)
-                     Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2E); Asm_Emit8(as, 0xC1);
-                     
-                     // Loop condition is "Run while True" (Left < Right).
-                     // We jump to End if False (Left >= Right).
-                     // UCOMISD sets CF=1 if Less.
-                     // JAE (Jump if Above or Equal, CF=0) skips loop.
-                     // JAE rel32: 0F 83
-                     Asm_Emit8(as, 0x0F);
-                     Asm_Emit8(as, 0x83);
-                     loopEndPatch = as->offset;
-                     Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
-                     
-                     fused = 1;
+            if (forStmt->condition) {
+                // OPTIMIZATION: Fused Compare-Branch for TOKEN_LESS
+                if (forStmt->condition->type == NODE_BINARY_EXPR) {
+                    BinaryExpr* bin = (BinaryExpr*)forStmt->condition;
+                    if (bin->op.type == TOKEN_LESS) {
+                        emitNode(as, bin->left, ctx);
+                        int rightSimple = (bin->right->type == NODE_LITERAL_EXPR);
+                        if (rightSimple) {
+                            Asm_Mov_Reg_Reg(as, R10, RAX);
+                            emitNode(as, bin->right, ctx);
+                        } else {
+                            Asm_Push(as, RAX);
+                            emitNode(as, bin->right, ctx);
+                            Asm_Pop(as, R10);
+                        }
+                        // XMM1 = Right, XMM0 = Left
+                        Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8);
+                        Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC2);
+                        
+                        // UCOMISD XMM0, XMM1
+                        Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2E); Asm_Emit8(as, 0xC1);
+                        
+                        // JAE (jump if >= to end)
+                        Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x83);
+                        loopEndPatch = as->offset;
+                        Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
+                        
+                        fused = 1;
+                    }
+                }
+                
+                if (!fused) {
+                    emitNode(as, forStmt->condition, ctx);
+                    Asm_Mov_Imm64(as, RCX, VAL_FALSE);
+                    Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8); // CMP RAX, RCX
+                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x84); // JE rel32
+                    loopEndPatch = as->offset;
+                    Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
                 }
             }
             
-            if (!fused) {
-                // Default: Evaluate condition -> RAX (0 or 1)
-                emitNode(as, whileStmt->condition, ctx);
-                
-                // Check if FALSE
-                Asm_Mov_Imm64(as, RCX, VAL_FALSE); // RCX = VAL_FALSE
-                // CMP RAX, RCX
-                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8);
-                // JE (jump if Equal to False) to loop end
-                Asm_Emit8(as, 0x0F); // JE rel32
-                Asm_Emit8(as, 0x84);
-                loopEndPatch = as->offset;
-                Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
-                Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
+            // 4. Loop body
+            emitNode(as, forStmt->body, ctx);
+            
+            // 5. Increment
+            if (forStmt->increment) {
+                emitNode(as, forStmt->increment, ctx);
             }
             
-            // Loop body
-            emitNode(as, whileStmt->body, ctx);
-            
-            // Jump back to loop start
+            // 6. Jump back to loop start
             int32_t backOffset = loopStart - (as->offset + 5);
             Asm_Jmp(as, backOffset);
             
-            // Patch the loop end jump
-            size_t loopEnd = as->offset;
-            int32_t forwardOffset = loopEnd - (loopEndPatch + 4);
-            Asm_Patch32(as, loopEndPatch, forwardOffset);
+            // 7. Patch the loop end jump
+            if (loopEndPatch != 0) {
+                size_t loopEnd = as->offset;
+                int32_t forwardOffset = loopEnd - (loopEndPatch + 4);
+                Asm_Patch32(as, loopEndPatch, forwardOffset);
+            }
             
             break;
         }

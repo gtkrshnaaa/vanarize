@@ -17,7 +17,7 @@ typedef enum {
     NODE_RETURN_STMT,
     NODE_IF_STMT,
 
-    NODE_WHILE_STMT,
+    NODE_FOR_STMT,  // Direct for loop (MASTERPLAN: no while)
     NODE_STRUCT_DECL,
     NODE_STRUCT_INIT,
     NODE_GET_EXPR, // obj.field
@@ -102,9 +102,11 @@ typedef struct {
 
 typedef struct {
     AstNode main;
-    AstNode* condition;
+    AstNode* initializer;  // Can be VarDecl or expression or NULL
+    AstNode* condition;    // Loop condition
+    AstNode* increment;    // Increment expression or NULL
     AstNode* body;
-} WhileStmt;
+} ForStmt;
 
 typedef struct {
     AstNode main;

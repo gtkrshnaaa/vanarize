@@ -167,7 +167,7 @@ static TokenType identifierType() {
             }
             break;
         case 'v': return checkKeyword(1, 3, "oid", TOKEN_TYPE_VOID);
-        case 'w': return checkKeyword(1, 4, "hile", TOKEN_WHILE);
+        // NOTE: 'while' keyword REMOVED per MASTERPLAN Section 4.2.C
     }
     return TOKEN_IDENTIFIER;
 }
