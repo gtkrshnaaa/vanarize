@@ -361,3 +361,133 @@ void Asm_Patch32(Assembler* as, size_t offset, int32_t value) {
 void Asm_Ret(Assembler* as) {
     Asm_Emit8(as, 0xC3);
 }
+
+// ==================== AVX SIMD INSTRUCTIONS ====================
+// VEX Prefix Format (3-byte): C4 RXBm-mmmm WvvvvLpp
+// VEX Prefix Format (2-byte): C5 RvvvvLpp (when R=1, X=1, B=1, m-mmmm=00001)
+
+// Helper: Emit 2-byte VEX prefix
+// R=1, vvvv=src1 inverted, L=1 (256-bit), pp=01 (66 prefix equivalent)
+static void emitVex2(Assembler* as, YmmRegister vvvv, int L, int pp) {
+    // C5 RvvvvLpp
+    // R=1 (no REX.R), vvvv inverted, L=1 for 256-bit
+    uint8_t byte2 = 0x80 | ((~vvvv & 0xF) << 3) | (L << 2) | pp;
+    Asm_Emit8(as, 0xC5);
+    Asm_Emit8(as, byte2);
+}
+
+// Helper: Emit 3-byte VEX prefix for AVX2
+static void emitVex3(Assembler* as, int R, int X, int B, int mmmmm, int W, YmmRegister vvvv, int L, int pp) {
+    // C4 RXBm-mmmm WvvvvLpp
+    uint8_t byte2 = ((~R & 1) << 7) | ((~X & 1) << 6) | ((~B & 1) << 5) | (mmmmm & 0x1F);
+    uint8_t byte3 = ((W & 1) << 7) | ((~vvvv & 0xF) << 3) | ((L & 1) << 2) | (pp & 3);
+    Asm_Emit8(as, 0xC4);
+    Asm_Emit8(as, byte2);
+    Asm_Emit8(as, byte3);
+}
+
+// VXORPD ymm, ymm, ymm - Zero a YMM register
+// VEX.256.66.0F.WIG 57 /r
+void Asm_Vxorpd_Ymm(Assembler* as, YmmRegister dst, YmmRegister src1, YmmRegister src2) {
+    emitVex2(as, src1, 1, 1);  // L=1 (256-bit), pp=01 (66)
+    Asm_Emit8(as, 0x57);       // XORPD opcode
+    Asm_Emit8(as, 0xC0 | (dst << 3) | src2);  // ModR/M: 11 dst src2
+}
+
+// VPXOR ymm, ymm, ymm - Integer XOR (for zeroing int vectors)
+// VEX.256.66.0F.WIG EF /r
+void Asm_Vpxor_Ymm(Assembler* as, YmmRegister dst, YmmRegister src1, YmmRegister src2) {
+    emitVex2(as, src1, 1, 1);  // L=1 (256-bit), pp=01 (66)
+    Asm_Emit8(as, 0xEF);       // PXOR opcode
+    Asm_Emit8(as, 0xC0 | (dst << 3) | src2);
+}
+
+// VPADDD ymm, ymm, ymm - Add 8 packed 32-bit integers
+// VEX.256.66.0F.WIG FE /r
+void Asm_Vpaddd_Ymm(Assembler* as, YmmRegister dst, YmmRegister src1, YmmRegister src2) {
+    emitVex2(as, src1, 1, 1);  // L=1 (256-bit), pp=01 (66)
+    Asm_Emit8(as, 0xFE);       // PADDD opcode
+    Asm_Emit8(as, 0xC0 | (dst << 3) | src2);
+}
+
+// VADDPD ymm, ymm, ymm - Add 4 packed doubles
+// VEX.256.66.0F.WIG 58 /r
+void Asm_Vaddpd_Ymm(Assembler* as, YmmRegister dst, YmmRegister src1, YmmRegister src2) {
+    emitVex2(as, src1, 1, 1);  // L=1 (256-bit), pp=01 (66)
+    Asm_Emit8(as, 0x58);       // ADDPD opcode
+    Asm_Emit8(as, 0xC0 | (dst << 3) | src2);
+}
+
+// VMOVDQU ymm, [RIP + disp] - Load 256 bits unaligned
+// VEX.256.F3.0F.WIG 6F /r
+void Asm_Vmovdqu_Ymm_Mem(Assembler* as, YmmRegister dst, void* mem) {
+    // Use RIP-relative addressing would be complex, use absolute for now
+    // Load pointer to RAX, then use [RAX]
+    // Actually simpler: emit address inline after instruction
+    // For now, stub - we'll load from static data
+    (void)as; (void)dst; (void)mem;
+    // TODO: Implement properly with RIP-relative or static data section
+}
+
+// VMOVDQU [mem], ymm - Store 256 bits unaligned
+void Asm_Vmovdqu_Mem_Ymm(Assembler* as, void* mem, YmmRegister src) {
+    (void)as; (void)mem; (void)src;
+    // TODO: Implement properly
+}
+
+// Horizontal sum of 8 ints in YMM -> RAX
+// Uses VEXTRACTI128, VPADDD, VPHADDD sequence
+void Asm_Avx_HSum_Int(Assembler* as, YmmRegister src) {
+    // For now, simple horizontal sum using SSE after extract
+    // VEXTRACTI128 xmm1, ymm0, 1  ; Get high 128 bits to XMM1
+    // VEX.256.66.0F3A.W0 39 /r ib
+    emitVex3(as, 1, 1, 1, 0x03, 0, YMM0, 1, 1);  // 0F3A map
+    Asm_Emit8(as, 0x39);  // VEXTRACTI128
+    Asm_Emit8(as, 0xC1 | (src << 3));  // ModR/M: ymm0 -> xmm1
+    Asm_Emit8(as, 0x01);  // imm8 = 1 (high half)
+    
+    // VPADDD xmm0, xmm0, xmm1 (128-bit)
+    emitVex2(as, YMM0, 0, 1);  // L=0 (128-bit)
+    Asm_Emit8(as, 0xFE);
+    Asm_Emit8(as, 0xC1);  // xmm0 += xmm1
+    
+    // Now xmm0 has 4 ints, need to sum to 1
+    // VPHADDD xmm0, xmm0, xmm0 (twice)
+    // VEX.128.66.0F38.WIG 02 /r
+    emitVex3(as, 1, 1, 1, 0x02, 0, YMM0, 0, 1);  // 0F38 map
+    Asm_Emit8(as, 0x02);  // VPHADDD
+    Asm_Emit8(as, 0xC0);  // xmm0, xmm0
+    
+    emitVex3(as, 1, 1, 1, 0x02, 0, YMM0, 0, 1);
+    Asm_Emit8(as, 0x02);
+    Asm_Emit8(as, 0xC0);
+    
+    // VMOVD eax, xmm0
+    // VEX.128.66.0F.W0 7E /r
+    emitVex2(as, YMM0, 0, 1);
+    Asm_Emit8(as, 0x7E);
+    Asm_Emit8(as, 0xC0);  // xmm0 -> eax
+}
+
+// Horizontal sum of 4 doubles in YMM -> XMM0 (single double)
+void Asm_Avx_HSum_Double(Assembler* as, YmmRegister src) {
+    // VEXTRACTF128 xmm1, ymm0, 1  ; Get high 128 bits
+    // VEX.256.66.0F3A.W0 19 /r ib
+    emitVex3(as, 1, 1, 1, 0x03, 0, YMM0, 1, 1);
+    Asm_Emit8(as, 0x19);  // VEXTRACTF128
+    Asm_Emit8(as, 0xC1 | (src << 3));
+    Asm_Emit8(as, 0x01);  // imm8 = 1
+    
+    // VADDPD xmm0, xmm0, xmm1 (128-bit)
+    emitVex2(as, YMM0, 0, 1);  // L=0 (128-bit)
+    Asm_Emit8(as, 0x58);
+    Asm_Emit8(as, 0xC1);  // xmm0 += xmm1
+    
+    // VHADDPD xmm0, xmm0, xmm0
+    // VEX.128.66.0F.WIG 7C /r
+    emitVex2(as, YMM0, 0, 1);
+    Asm_Emit8(as, 0x7C);  // HADDPD
+    Asm_Emit8(as, 0xC0);  // xmm0, xmm0
+    
+    // Result is now in low 64 bits of XMM0
+}

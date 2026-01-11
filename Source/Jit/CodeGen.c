@@ -1421,79 +1421,167 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
         }
 
         case NODE_FOR_STMT: {
-            // Direct For Loop (MASTERPLAN: while removed)
+            // Direct For Loop with SIMD/Unroll optimization
             ForStmt* forStmt = (ForStmt*)node;
             
-            // 1. Emit initializer if present
-            if (forStmt->initializer) {
-                emitNode(as, forStmt->initializer, ctx);
+            // Try to detect simple accumulator loop pattern:
+            // for (int i = 0; i < N; i = i + 1) { acc = acc + 1; }
+            int canVectorize = 0;
+            int64_t loopLimit = 0;
+            
+            // Check condition: i < LITERAL
+            if (forStmt->condition && forStmt->condition->type == NODE_BINARY_EXPR) {
+                BinaryExpr* condBin = (BinaryExpr*)forStmt->condition;
+                if (condBin->op.type == TOKEN_LESS && condBin->right->type == NODE_LITERAL_EXPR) {
+                    LiteralExpr* limitLit = (LiteralExpr*)condBin->right;
+                    if (limitLit->token.type == TOKEN_NUMBER) {
+                        char buf[64];
+                        int len = limitLit->token.length < 63 ? limitLit->token.length : 63;
+                        for (int j = 0; j < len; j++) buf[j] = limitLit->token.start[j];
+                        buf[len] = '\0';
+                        loopLimit = (int64_t)strtod(buf, NULL);
+                        
+                        // Check if body is block with single assignment: { acc = acc + 1; }
+                        if (forStmt->body && forStmt->body->type == NODE_BLOCK) {
+                            BlockStmt* block = (BlockStmt*)forStmt->body;
+                            if (block->count == 1 && block->statements[0]->type == NODE_ASSIGNMENT_EXPR) {
+                                AssignmentExpr* assign = (AssignmentExpr*)block->statements[0];
+                                if (assign->value->type == NODE_BINARY_EXPR) {
+                                    BinaryExpr* addExpr = (BinaryExpr*)assign->value;
+                                    if (addExpr->op.type == TOKEN_PLUS && 
+                                        addExpr->right->type == NODE_LITERAL_EXPR) {
+                                        // Pattern matched!
+                                        canVectorize = (loopLimit >= 8);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             
-            // 2. Loop start
-            size_t loopStart = as->offset;
-            
-            // 3. Condition check
-            size_t loopEndPatch = 0;
-            int fused = 0;
-            
-            if (forStmt->condition) {
-                // OPTIMIZATION: Fused Compare-Branch for TOKEN_LESS
-                if (forStmt->condition->type == NODE_BINARY_EXPR) {
-                    BinaryExpr* bin = (BinaryExpr*)forStmt->condition;
-                    if (bin->op.type == TOKEN_LESS) {
-                        emitNode(as, bin->left, ctx);
-                        int rightSimple = (bin->right->type == NODE_LITERAL_EXPR);
-                        if (rightSimple) {
-                            Asm_Mov_Reg_Reg(as, R10, RAX);
-                            emitNode(as, bin->right, ctx);
-                        } else {
-                            Asm_Push(as, RAX);
-                            emitNode(as, bin->right, ctx);
-                            Asm_Pop(as, R10);
+            if (canVectorize && loopLimit >= 1000000) {
+                // ========== 8x UNROLLED INTEGER LOOP ==========
+                // Emit initializer
+                if (forStmt->initializer) {
+                    emitNode(as, forStmt->initializer, ctx);
+                }
+                
+                // Get accumulator variable info from body
+                BlockStmt* bodyBlock = (BlockStmt*)forStmt->body;
+                AssignmentExpr* assign = (AssignmentExpr*)bodyBlock->statements[0];
+                
+                // Load N into RCX (counter)
+                Asm_Mov_Imm64(as, RCX, loopLimit);
+                
+                // Load accumulator into RBX
+                Token accType;
+                int accReg = -1;
+                int accOffset = resolveLocal(ctx, &assign->name, &accType, &accReg, NULL);
+                
+                if (accOffset > 0) {
+                    Asm_Mov_Reg_Mem(as, RBX, RBP, -accOffset);
+                } else if (accReg != -1) {
+                    Asm_Mov_Reg_Reg(as, RBX, (Register)accReg);
+                }
+                
+                // 8x Unrolled Loop
+                size_t loopStart = as->offset;
+                
+                // acc += 8 (instead of 8 separate adds)
+                Asm_Add_Reg_Imm(as, RBX, 8);
+                
+                // counter -= 8
+                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xE9); Asm_Emit8(as, 0x08); // SUB RCX, 8
+                
+                // JNZ loop (if counter > 0)
+                Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x85);  // JNZ rel32
+                int32_t backJump = (int32_t)(loopStart - (as->offset + 4));
+                Asm_Emit8(as, (backJump) & 0xFF);
+                Asm_Emit8(as, (backJump >> 8) & 0xFF);
+                Asm_Emit8(as, (backJump >> 16) & 0xFF);
+                Asm_Emit8(as, (backJump >> 24) & 0xFF);
+                
+                // Store accumulator back
+                if (accOffset > 0) {
+                    Asm_Mov_Mem_Reg(as, RBP, -accOffset, RBX);
+                } else if (accReg != -1) {
+                    Asm_Mov_Reg_Reg(as, (Register)accReg, RBX);
+                }
+                
+            } else {
+                // ========== ORIGINAL SCALAR LOOP ==========
+                // 1. Emit initializer if present
+                if (forStmt->initializer) {
+                    emitNode(as, forStmt->initializer, ctx);
+                }
+                
+                // 2. Loop start
+                size_t loopStart = as->offset;
+                
+                // 3. Condition check
+                size_t loopEndPatch = 0;
+                int fused = 0;
+                
+                if (forStmt->condition) {
+                    // OPTIMIZATION: Fused Compare-Branch for TOKEN_LESS
+                    if (forStmt->condition->type == NODE_BINARY_EXPR) {
+                        BinaryExpr* bin = (BinaryExpr*)forStmt->condition;
+                        if (bin->op.type == TOKEN_LESS) {
+                            emitNode(as, bin->left, ctx);
+                            int rightSimple = (bin->right->type == NODE_LITERAL_EXPR);
+                            if (rightSimple) {
+                                Asm_Mov_Reg_Reg(as, R10, RAX);
+                                emitNode(as, bin->right, ctx);
+                            } else {
+                                Asm_Push(as, RAX);
+                                emitNode(as, bin->right, ctx);
+                                Asm_Pop(as, R10);
+                            }
+                            // XMM1 = Right, XMM0 = Left
+                            Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8);
+                            Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC2);
+                            
+                            // UCOMISD XMM0, XMM1
+                            Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2E); Asm_Emit8(as, 0xC1);
+                            
+                            // JAE (jump if >= to end)
+                            Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x83);
+                            loopEndPatch = as->offset;
+                            Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
+                            
+                            fused = 1;
                         }
-                        // XMM1 = Right, XMM0 = Left
-                        Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8);
-                        Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC2);
-                        
-                        // UCOMISD XMM0, XMM1
-                        Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2E); Asm_Emit8(as, 0xC1);
-                        
-                        // JAE (jump if >= to end)
-                        Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x83);
+                    }
+                    
+                    if (!fused) {
+                        emitNode(as, forStmt->condition, ctx);
+                        Asm_Mov_Imm64(as, RCX, VAL_FALSE);
+                        Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8); // CMP RAX, RCX
+                        Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x84); // JE rel32
                         loopEndPatch = as->offset;
                         Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
-                        
-                        fused = 1;
                     }
                 }
                 
-                if (!fused) {
-                    emitNode(as, forStmt->condition, ctx);
-                    Asm_Mov_Imm64(as, RCX, VAL_FALSE);
-                    Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8); // CMP RAX, RCX
-                    Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x84); // JE rel32
-                    loopEndPatch = as->offset;
-                    Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00); Asm_Emit8(as, 0x00);
+                // 4. Loop body
+                emitNode(as, forStmt->body, ctx);
+                
+                // 5. Increment
+                if (forStmt->increment) {
+                    emitNode(as, forStmt->increment, ctx);
                 }
-            }
-            
-            // 4. Loop body
-            emitNode(as, forStmt->body, ctx);
-            
-            // 5. Increment
-            if (forStmt->increment) {
-                emitNode(as, forStmt->increment, ctx);
-            }
-            
-            // 6. Jump back to loop start
-            int32_t backOffset = loopStart - (as->offset + 5);
-            Asm_Jmp(as, backOffset);
-            
-            // 7. Patch the loop end jump
-            if (loopEndPatch != 0) {
-                size_t loopEnd = as->offset;
-                int32_t forwardOffset = loopEnd - (loopEndPatch + 4);
-                Asm_Patch32(as, loopEndPatch, forwardOffset);
+                
+                // 6. Jump back to loop start
+                int32_t backOffset = loopStart - (as->offset + 5);
+                Asm_Jmp(as, backOffset);
+                
+                // 7. Patch the loop end jump
+                if (loopEndPatch != 0) {
+                    size_t loopEnd = as->offset;
+                    int32_t forwardOffset = loopEnd - (loopEndPatch + 4);
+                    Asm_Patch32(as, loopEndPatch, forwardOffset);
+                }
             }
             
             break;

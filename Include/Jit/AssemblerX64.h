@@ -90,4 +90,36 @@ void Asm_Patch32(Assembler* as, size_t offset, int32_t value);
 // RET
 void Asm_Ret(Assembler* as);
 
+// ==================== AVX SIMD INSTRUCTIONS ====================
+
+// YMM Register enum (256-bit AVX registers)
+typedef enum {
+    YMM0 = 0, YMM1 = 1, YMM2 = 2, YMM3 = 3,
+    YMM4 = 4, YMM5 = 5, YMM6 = 6, YMM7 = 7
+} YmmRegister;
+
+// AVX: VXORPD ymm, ymm, ymm (Zero a YMM register)
+void Asm_Vxorpd_Ymm(Assembler* as, YmmRegister dst, YmmRegister src1, YmmRegister src2);
+
+// AVX: VPADDD ymm, ymm, ymm (Add 8 packed 32-bit integers)
+void Asm_Vpaddd_Ymm(Assembler* as, YmmRegister dst, YmmRegister src1, YmmRegister src2);
+
+// AVX: VADDPD ymm, ymm, ymm (Add 4 packed doubles)
+void Asm_Vaddpd_Ymm(Assembler* as, YmmRegister dst, YmmRegister src1, YmmRegister src2);
+
+// AVX: VMOVDQU ymm, [mem] (Load 256 bits unaligned)
+void Asm_Vmovdqu_Ymm_Mem(Assembler* as, YmmRegister dst, void* mem);
+
+// AVX: VMOVDQU [mem], ymm (Store 256 bits unaligned)
+void Asm_Vmovdqu_Mem_Ymm(Assembler* as, void* mem, YmmRegister src);
+
+// AVX: VPXOR ymm, ymm, ymm (XOR - zero register for ints)
+void Asm_Vpxor_Ymm(Assembler* as, YmmRegister dst, YmmRegister src1, YmmRegister src2);
+
+// AVX: Horizontal sum YMM (8 ints) -> RAX
+void Asm_Avx_HSum_Int(Assembler* as, YmmRegister src);
+
+// AVX: Horizontal sum YMM (4 doubles) -> XMM0
+void Asm_Avx_HSum_Double(Assembler* as, YmmRegister src);
+
 #endif // VANARIZE_JIT_ASSEMBLER_H
