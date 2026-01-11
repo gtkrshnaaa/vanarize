@@ -9,6 +9,7 @@
 #include "Core/Native.h"
 #include "StdLib/StdTime.h"
 #include "StdLib/StdMath.h"
+#include "StdLib/StdBenchmark.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -572,8 +573,30 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     fprintf(stderr, "JIT Error: Unknown StdTime method '%.*s'\n", get->name.length, get->name.start);
                     exit(1);
                 }
+            } else if (get->object->type == NODE_LITERAL_EXPR) {
+                // StdBenchmark Check
+                LiteralExpr* lit = (LiteralExpr*)get->object;
+                if (lit->token.type == TOKEN_IDENTIFIER && 
+                    lit->token.length == 12 && 
+                    memcmp(lit->token.start, "StdBenchmark", 12) == 0) {
+                        
+                        void* funcPtr = NULL;
+                        if (get->name.length == 5 && memcmp(get->name.start, "Start", 5) == 0) {
+                            funcPtr = (void*)StdBenchmark_Start;
+                        } else if (get->name.length == 3 && memcmp(get->name.start, "End", 3) == 0) {
+                            funcPtr = (void*)StdBenchmark_End;
+                        }
+
+                        if (funcPtr) {
+                            Asm_Mov_Imm64(as, RAX, (uint64_t)funcPtr);
+                            ctx->lastExprType = TYPE_UNKNOWN; // Function pointer
+                            break;
+                        }
+                    }
+                   // Fallthrough to normal property
             }
-            
+
+            // Normal Property Access logic...
             // 1. Compile Object -> RAX
             emitNode(as, get->object, ctx);
             
@@ -805,10 +828,10 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     Token ns = lit->token;
                     Token method = get->name;
                     
+                    void* funcPtr = NULL;
+                    
                     // Namespace: StdTime
                     if (ns.length == 7 && memcmp(ns.start, "StdTime", 7) == 0) {
-                        void* funcPtr = NULL;
-                        
                         if (method.length == 3 && memcmp(method.start, "Now", 3) == 0) {
                              funcPtr = (void*)StdTime_Now;
                         } else if (method.length == 7 && memcmp(method.start, "Measure", 7) == 0) {
@@ -821,32 +844,24 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                                  Asm_Pop(as, RDI); // Arg1
                              }
                              funcPtr = (void*)StdTime_Sleep;
-                             Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
-                             Asm_Call_Reg(as, RAX);
-                             break;
+                         }
+                    } 
+                    // Namespace: StdBenchmark
+                    else if (ns.length == 12 && memcmp(ns.start, "StdBenchmark", 12) == 0) {
+                        if (method.length == 5 && memcmp(method.start, "Start", 5) == 0) {
+                            funcPtr = (void*)StdBenchmark_Start;
+                        } else if (method.length == 3 && memcmp(method.start, "End", 3) == 0) {
+                             // End(iterations) - 1 arg
+                             if (call->argCount > 0) {
+                                 emitNode(as, call->args[0], ctx);
+                                 Asm_Push(as, RAX); 
+                                 Asm_Pop(as, RDI); // Arg1
+                             }
+                            funcPtr = (void*)StdBenchmark_End;
                         }
-                        
-                        // For Now() and Measure(), they return non-void
-                        if (funcPtr) {
-                            // ALIGN STACK Before CALL
-                            int padding = 0;
-                            if (ctx->stackSize % 16 != 0) {
-                                padding = 8;
-                                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xEC); Asm_Emit8(as, 0x08); // SUB RSP, 8
-                            }
-
-                            Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
-                            Asm_Call_Reg(as, RAX);
-
-                            if (padding > 0) {
-                                 Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xC4); Asm_Emit8(as, 0x08); // ADD RSP, 8
-                            }
-                            break;
-                        }
-                    } else if (ns.length == 7 && memcmp(ns.start, "StdMath", 7) == 0) {
-                        void* funcPtr = NULL;
-                        // Single argument math functions
-                        
+                    }
+                    // Namespace: StdMath
+                    else if (ns.length == 7 && memcmp(ns.start, "StdMath", 7) == 0) {
                         if (method.length == 3 && memcmp(method.start, "Sin", 3) == 0) {
                              funcPtr = (void*)StdMath_Sin;
                         } else if (method.length == 3 && memcmp(method.start, "Cos", 3) == 0) {
@@ -863,30 +878,31 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                              funcPtr = (void*)StdMath_Ceil; 
                         }
                         
-                        if (funcPtr) {
-                            // 1 Arg
-                            if (call->argCount > 0) {
-                                emitNode(as, call->args[0], ctx);
-                                Asm_Push(as, RAX); 
-                                Asm_Pop(as, RDI); 
-                            }
-                            
-                            // ALIGN STACK Before CALL
-                            int padding = 0;
-                            // Checking stackSize which represents pushed locals/params (relative to RBP)
-                            if (ctx->stackSize % 16 != 0) {
-                                padding = 8;
-                                Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xEC); Asm_Emit8(as, 0x08); // SUB RSP, 8
-                            }
-
-                            Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
-                            Asm_Call_Reg(as, RAX);
-                            
-                            if (padding > 0) {
-                                 Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xC4); Asm_Emit8(as, 0x08); // ADD RSP, 8
-                            }
-                            break;
+                        // Handle Args for Math (1 arg)
+                        if (funcPtr && call->argCount > 0) {
+                            emitNode(as, call->args[0], ctx);
+                            Asm_Push(as, RAX); 
+                            Asm_Pop(as, RDI); 
                         }
+                    }
+
+                    // Emit Call if Intrinsic found
+                    if (funcPtr) {
+                        // ALIGN STACK Before CALL
+                        int padding = 0;
+                        if (ctx->stackSize % 16 != 0) {
+                            padding = 8;
+                            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xEC); Asm_Emit8(as, 0x08); // SUB RSP, 8
+                        }
+
+                        Asm_Mov_Reg_Ptr(as, RAX, funcPtr);
+                        Asm_Call_Reg(as, RAX);
+
+                        if (padding > 0) {
+                             Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x83); Asm_Emit8(as, 0xC4); Asm_Emit8(as, 0x08); // ADD RSP, 8
+                        }
+                        ctx->lastExprType = TYPE_UNKNOWN;
+                        break;
                     }
                 }
 
@@ -904,6 +920,17 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                     // Special case: print - call directly
                     if (call->argCount > 0) {
                         emitNode(as, call->args[0], ctx);
+                        // BOXING FIX FOR PRINT
+                        ValueType type = ctx->lastExprType;
+                        if (type == TYPE_INT || type == TYPE_LONG) {
+                             Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC0); // MOVQ XMM0, RAX
+                             Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC0); // CVTSI2SD XMM0, RAX
+                             Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
+                        } else if (type == TYPE_BOOLEAN) {
+                             Asm_Mov_Imm64(as, RCX, VAL_FALSE);
+                             Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x01); Asm_Emit8(as, 0xC8); // ADD RAX, RCX
+                        }
+                        
                         Asm_Push(as, RAX);
                         Asm_Pop(as, RDI);
                     }
@@ -977,10 +1004,6 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                      Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x7E); Asm_Emit8(as, 0xC0); // MOVQ RAX, XMM0
                 } else if (type == TYPE_BOOLEAN) {
                      // Convert Bool(RAX=0/1) to VAL_FALSE/VAL_TRUE
-                     // MOV RCX, VAL_FALSE
-                     // MOV RDX, VAL_TRUE
-                     // TEST RAX, RAX
-                     // CMOVNZ RCX, RDX ?? Or branchless math.
                      // VAL_FALSE = QNAN | 2. VAL_TRUE = QNAN | 3.
                      // If RAX=0/1. Result = (QNAN|2) + RAX.
                      Asm_Mov_Imm64(as, RCX, VAL_FALSE);
@@ -1271,16 +1294,7 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
 
                 if (isInt) {
                     // Integer Compare: CMP R10, RAX
-                    Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC2); // CMP R10, RAX (Wait, R10? need REX.W+REX.B=48+4+1=4D? NO. R10=8+2. Low=2. Ext=1)
-                    // CMP r/m64, r64 (MR)? or RM?
-                    // CMP R10, RAX.
-                    // R10 is destination? LHS.
-                    // CMP LHS, RHS.
-                    // Opcode 39 /r : CMP r/m64, r64. (MR).
-                    // ModRM: Reg=RAX(0), RM=R10(2).
-                    // REX.W(1) | REX.B(1) (for R10). 0x48 | 0x04? No REX.B is 01. 0x49.
-                    // ModRM: 11 000 010 (C2).
-                    // Correct: 49 39 C2.
+                    Asm_Cmp_Reg_Reg(as, R10, RAX); // CMP R10, RAX
                     
                     // SETcc
                     Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x31); Asm_Emit8(as, 0xC0); // XOR RAX, RAX (Result 0)
@@ -1303,7 +1317,9 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                          Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8); // MOVQ XMM1, RAX
                          Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC8); // CVTSI2SD XMM1, RAX
                     } else {
-                         // Assume Double - Move directly
+                         // Unbox if Unknown
+                         // FIX: Do NOT mask! Valid Doubles are stored as-is (NaN Boxing). 
+                         // Just move directly.
                          Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC8); // MOVQ XMM1, RAX
                     }
                     
@@ -1313,7 +1329,8 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
                          Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC2); // MOVQ XMM0, R10
                          Asm_Emit8(as, 0xF2); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x2A); Asm_Emit8(as, 0xC2); // CVTSI2SD XMM0, R10
                     } else {
-                         // Assume Double
+                         // Unbox if Unknown
+                         // FIX: Do NOT mask!
                          Asm_Emit8(as, 0x66); Asm_Emit8(as, 0x49); Asm_Emit8(as, 0x0F); Asm_Emit8(as, 0x6E); Asm_Emit8(as, 0xC2); // MOVQ XMM0, R10
                     }
                     
@@ -1356,16 +1373,20 @@ static void emitNode(Assembler* as, AstNode* node, CompilerContext* ctx) {
         case NODE_IF_STMT: {
             IfStmt* stmt = (IfStmt*)node;
             // 1. Compile Condition
-            emitNode(as, stmt->condition, ctx);
+            // 2. Check Result
+            if (ctx->lastExprType == TYPE_BOOLEAN) {
+                 // Raw 0/1 (0=False, 1=True)
+                 Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x85); Asm_Emit8(as, 0xC0); // TEST RAX, RAX
+                 // JE elseBranch (Jump if Zero/False)
+            } else {
+                 // Boxed Value
+                 // Load VAL_FALSE to RCX.
+                 Asm_Mov_Imm64(as, RCX, VAL_FALSE);
+                 // CMP RAX, RCX
+                 Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8); // CMP RAX, RCX
+                 // JE elseBranch (Jump if Equal to False)
+            }
             
-            // 2. Check if false (Compare RAX with VAL_FALSE)
-            // Load VAL_FALSE to RCX.
-            Asm_Mov_Imm64(as, RCX, VAL_FALSE);
-            
-            // CMP RAX, RCX
-            Asm_Emit8(as, 0x48); Asm_Emit8(as, 0x39); Asm_Emit8(as, 0xC8); // CMP RAX, RCX
-            
-            // JE elseBranch (Jump if Equal to False)
             size_t elseJumpPatch = as->offset + 2; // Offset of the displacement bytes (after 0F 84)
             Asm_Je(as, 0); 
             
