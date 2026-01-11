@@ -6,6 +6,7 @@
 #include "Jit/CodeGen.h"
 #include "Core/Memory.h"
 #include "Core/GarbageCollector.h"
+#include "Core/EventLoop.h"
 
 char* readFile(const char* path) {
     FILE* file = fopen(path, "rb");
@@ -34,6 +35,7 @@ int main(int argc, char* argv[]) {
     
     // Initialize Core Systems
     VM_InitMemory();
+    EventLoop_Init();
     // Jit_Init(); // Initialized internally or not needed if stateless
     
     // Check args
