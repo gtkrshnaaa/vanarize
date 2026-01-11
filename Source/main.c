@@ -43,7 +43,7 @@ int main(int argc, char* argv[]) {
         exit(65);
     }
     
-    jit_compile_and_run:
+    
     JitFunction func = Jit_Compile(root);
     func();
     
