@@ -19,17 +19,13 @@ void Asm_Emit8(Assembler* as, uint8_t byte) {
 // MOV r64, imm64
 // Opcode: 48 B8+rd val (for RAX..RDI)
 void Asm_Mov_Imm64(Assembler* as, Register dst, uint64_t val) {
-    if (dst > RDI) {
-        // REX.W + REX.B prefix needed for R8-R15
-        // Todo implementation
-        fprintf(stderr, "Extended registers not yet supported in Mov_Imm64\n");
-        exit(1);
-    }
-    // REX.W prefix (48) is strictly speaking needed for 64-bit operands,
-    // but the short form 48 B8+rd is common.
-    // Actually: REX.W (0x48) | B8+rd
-    Asm_Emit8(as, 0x48);
-    Asm_Emit8(as, 0xB8 + dst); 
+    // REX.W prefix (48) is strictly speaking needed for 64-bit operands.
+    // Extended regs need REX.B (0x01).
+    uint8_t rex = 0x48;
+    if (dst >= R8) rex |= 0x01;
+    
+    Asm_Emit8(as, rex);
+    Asm_Emit8(as, 0xB8 + (dst & 7)); 
     
     // Emit 64-bit immediate
     for (int i = 0; i < 8; i++) {
@@ -41,53 +37,81 @@ void Asm_Mov_Imm64(Assembler* as, Register dst, uint64_t val) {
 // MOV dst, src
 // Opcode: 48 89 /r (ModR/M)
 void Asm_Mov_Reg_Reg(Assembler* as, Register dst, Register src) {
-    if (dst > RDI || src > RDI) {
-        fprintf(stderr, "Extended registers not yet supported in Mov_Reg_Reg\n");
-        exit(1);
-    }
-    Asm_Emit8(as, 0x48);
+    // REX Prefix logic
+    uint8_t rex = 0x48;
+    if (src >= R8) rex |= 0x04; // REX.R (Source is Reg field)
+    if (dst >= R8) rex |= 0x01; // REX.B (Dest is RM field)
+    
+    Asm_Emit8(as, rex);
     Asm_Emit8(as, 0x89);
+    
     // Mod = 11 (Register) | Src | Dst
-    uint8_t modrm = 0xC0 | (src << 3) | dst;
+    uint8_t srcEnc = src & 7;
+    uint8_t dstEnc = dst & 7;
+    uint8_t modrm = 0xC0 | (srcEnc << 3) | dstEnc;
     Asm_Emit8(as, modrm);
 }
 
 // ADD dst, src
 // Opcode: 48 01 /r
 void Asm_Add_Reg_Reg(Assembler* as, Register dst, Register src) {
-    if (dst > RDI || src > RDI) {
-        fprintf(stderr, "Extended registers not yet supported in Add_Reg_Reg\n");
-        exit(1);
-    }
-    // REX.W (48) 
-    Asm_Emit8(as, 0x48);
+    // REX Prefix logic
+    uint8_t rex = 0x48;
+    if (src >= R8) rex |= 0x04;
+    if (dst >= R8) rex |= 0x01;
+    
+    Asm_Emit8(as, rex);
     Asm_Emit8(as, 0x01);
     
-    // ModR/M Byte
-    // Mode 11 (Register Addressing) | Src (3 bits) | Dst (3 bits)
-    // 0xC0 + (src << 3) + dst
-    uint8_t modrm = 0xC0 | (src << 3) | dst;
+    uint8_t srcEnc = src & 7;
+    uint8_t dstEnc = dst & 7;
+    uint8_t modrm = 0xC0 | (srcEnc << 3) | dstEnc;
+    Asm_Emit8(as, modrm);
+}
+
+// AND dst, src
+// Opcode: 48 21 /r
+void Asm_And_Reg_Reg(Assembler* as, Register dst, Register src) {
+    // REX Prefix logic
+    uint8_t rex = 0x48;
+    if (src >= R8) rex |= 0x04;
+    if (dst >= R8) rex |= 0x01;
+    
+    Asm_Emit8(as, rex);
+    Asm_Emit8(as, 0x21); // AND opcode
+    
+    uint8_t srcEnc = src & 7;
+    uint8_t dstEnc = dst & 7;
+    uint8_t modrm = 0xC0 | (srcEnc << 3) | dstEnc;
     Asm_Emit8(as, modrm);
 }
 
 // PUSH r64
 // Opcode: 50 + rd
 void Asm_Push(Assembler* as, Register src) {
-    if (src > RDI) {
-        fprintf(stderr, "Extended registers not yet supported in Push\n");
-        exit(1);
+    if (src >= R8) {
+        // REX.B (41) + 50+(src-8)
+        // Actually REX is 0x41 (0100 0001) - W bit not needed for Push/Pop usually?
+        // Intel manual: PUSH r64. default 64-bit size. REX.W not needed.
+        // But REX.B is needed for extended reg.
+        // So 0x41.
+        Asm_Emit8(as, 0x41);
+        Asm_Emit8(as, 0x50 + (src & 7));
+    } else {
+        Asm_Emit8(as, 0x50 + src);
     }
-    Asm_Emit8(as, 0x50 + src);
 }
 
 // POP r64
 // Opcode: 58 + rd
 void Asm_Pop(Assembler* as, Register dst) {
-    if (dst > RDI) {
-        fprintf(stderr, "Extended registers not yet supported in Pop\n");
-        exit(1);
+    if (dst >= R8) {
+        // REX.B (41)
+        Asm_Emit8(as, 0x41);
+        Asm_Emit8(as, 0x58 + (dst & 7));
+    } else {
+        Asm_Emit8(as, 0x58 + dst);
     }
-    Asm_Emit8(as, 0x58 + dst);
 }
 
 // CALL r64
@@ -159,12 +183,19 @@ void Asm_Cmp_Reg_Imm(Assembler* as, Register dst, int32_t imm) {
     Asm_Emit8(as, (imm >> 24) & 0xFF);
 }
 
+// CMP r64, r64
 void Asm_Cmp_Reg_Reg(Assembler* as, Register dst, Register src) {
-    // CMP r64, r64: 48 39 /r
-    Asm_Emit8(as, 0x48); // REX.W
+    // REX Prefix logic
+    uint8_t rex = 0x48;
+    if (src >= R8) rex |= 0x04;
+    if (dst >= R8) rex |= 0x01;
+    
+    Asm_Emit8(as, rex);
     Asm_Emit8(as, 0x39); // CMP opcode
-    // ModRM: Mod=11, Reg=src, RM=dst
-    uint8_t modrm = 0xC0 + (src << 3) + dst;
+    
+    uint8_t srcEnc = src & 7;
+    uint8_t dstEnc = dst & 7;
+    uint8_t modrm = 0xC0 | (srcEnc << 3) | dstEnc;
     Asm_Emit8(as, modrm);
 }
 

@@ -38,6 +38,9 @@ void Asm_Mov_Reg_Reg(Assembler* as, Register dst, Register src);
 // ADD dst, src
 void Asm_Add_Reg_Reg(Assembler* as, Register dst, Register src);
 
+// AND dst, src
+void Asm_And_Reg_Reg(Assembler* as, Register dst, Register src);
+
 // PUSH r64
 void Asm_Push(Assembler* as, Register src);
 
